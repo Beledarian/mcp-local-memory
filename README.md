@@ -100,26 +100,31 @@ The server will expose these tools to the Agent:
 4.  **`list_recent_memories(limit?: number)`**
     - Getting the last N items for context.
 
-## 4. Directory Structure (Proposed)
+## System Architecture
 
+### 1. Hybrid Search (Vector + FTS)
+This server implements a "hybrid" storage approach to ensure compatibility and robustness:
+- **Primary**: Semantic Search using `sqlite-vec`. This allows finding memories by meaning (e.g., "favorite food" matches "I like pizza").
+- **Fallback**: Full-Text Search (FTS5). If `sqlite-vec` is not compatible with the host system (e.g., missing binaries for Windows ARM64), the system automatically gracefully degrades to use SQLite's native FTS5 engine. This allows finding memories by keyword matching (e.g., "pizza" matches "I like pizza").
+
+### 2. Auto-Sync
+Database triggers ensure that the `memories` table and the `memories_fts` search index are always perfectly in sync. When you add, update, or delete a memory, the search index is updated instantly.
+
+### 3. Privacy & Storage
+All data is stored in a single local file (`memory.db`). No data leaves your machine unless you explicitly export it using the `export_memories` tool.
+
+## Directory Structure
 ```text
 /mcp-local-memory/
 ├── package.json
 ├── src/
-│   ├── index.ts          # Entry point (MCP Server setup)
+│   ├── index.ts          # Entry point (MCP Server setup & Logic)
 │   ├── db/
-│   │   ├── schema.ts     # SQLite table definitions
+│   │   ├── schema.ts     # SQLite table definitions (Memories + Vectors + FTS5)
 │   │   └── client.ts     # Database connection & vector extension load
 │   ├── lib/
-│   │   ├── embeddings.ts # Logic to fetch embeddings (API or Local)
-│   │   └── ingest.ts     # Logic to process text
+│   │   ├── embeddings.ts # Logic to fetch embeddings
 │   └── tools/
 │       └── definitions.ts # Schema for MCP tools
 └── tsconfig.json
 ```
-
-## 5. Next Steps
-
-1.  Initialize this project with `npm init` (outside the monorepo if desired).
-2.  Install `better-sqlite3`, `sqlite-vec`, `@modelcontextprotocol/sdk`.
-3.  Write the `db/client.ts` to verify vector extension loading.

@@ -33,4 +33,31 @@ export function initSchema(db: Database) {
     console.warn("Failed to create virtual vector table. sqlite-vec might not be loaded. Semantic search will fail.", error);
     // Do NOT throw error, so the rest of the server (basic memory) can still work
   }
+
+  // Create FTS5 virtual table for full-text search
+  // content='memories' means it's an "external content" FTS table, saving space
+  // But for simplicity and better compatibility with triggers, we'll use a standard FTS table 
+  // and sync it with triggers.
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+      content,
+      tags
+    );
+  `);
+
+  // Triggers to keep FTS index in sync with memories table
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+      INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
+    END;
+    
+    CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES('delete', old.rowid, old.content, old.tags);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+      INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES('delete', old.rowid, old.content, old.tags);
+      INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
+    END;
+  `);
 }

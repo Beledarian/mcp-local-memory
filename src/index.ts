@@ -99,29 +99,65 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const embedding = await embedder.embed(query);
         const float32Embedding = new Float32Array(embedding);
 
-        // 2. Search using vector extension
-        // Join back with memories table to get content
-        const results = db
-          .prepare(
-            `
-            SELECT 
-              m.id, 
-              m.content, 
-              m.created_at,
-              vec_distance_cosine(v.embedding, ?) as distance
-            FROM vec_items v
-            JOIN memories m ON v.rowid = m.rowid
-            ORDER BY distance
-            LIMIT ?
-            `
-          )
-          .all(Buffer.from(float32Embedding.buffer), limit) as any[];
+        // 2. Search
+        let results: any[] = [];
+        let usedSearchMethod = "vector";
+
+        try {
+            // Attempt vector search
+            // Join back with memories table to get content
+            results = db
+              .prepare(
+                `
+                SELECT 
+                  m.id, 
+                  m.content, 
+                  m.created_at,
+                  vec_distance_cosine(v.embedding, ?) as distance
+                FROM vec_items v
+                JOIN memories m ON v.rowid = m.rowid
+                ORDER BY distance
+                LIMIT ?
+                `
+              )
+              .all(Buffer.from(float32Embedding.buffer), limit) as any[];
+        } catch (err) {
+            // Vector search failed (likely missing extension), fall back to FTS
+             usedSearchMethod = "fts-fallback";
+        }
+
+        // 3. Fallback: If vector search failed or returned 0 results, try FTS
+        if (results.length === 0) {
+            usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
+            // Use FTS Match
+            // We use the raw query for matching. 
+            // Note: FTS5 query syntax is powerful but can error on special chars. 
+            // Simple sanitization: remove non-alphanumeric chars or just wrap in quotes if needed.
+            // For now, we utilize the query as is, but wrapped in quotes to treat as phrase or simple tokens.
+            const ftsResults = db.prepare(`
+                SELECT 
+                    id, 
+                    memories.content, 
+                    created_at,
+                    rank as score
+                FROM memories_fts 
+                JOIN memories ON memories_fts.rowid = memories.rowid
+                WHERE memories_fts MATCH ? 
+                ORDER BY rank
+                LIMIT ?
+            `).all(query, limit) as any[];
+            
+            results = ftsResults;
+        }
 
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify(results, null, 2),
+              text: JSON.stringify({
+                  method: usedSearchMethod,
+                  results: results
+              }, null, 2),
             },
           ],
         };

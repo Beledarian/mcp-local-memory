@@ -26,7 +26,7 @@ export const REMEMBER_FACT_TOOL: any = {
 
 export const RECALL_TOOL: any = {
   name: "recall",
-  description: "Search for past memories based on semantic meaning.",
+  description: "Search for passed memories. Uses semantic search if available, falls back to full-text search.",
   inputSchema: {
     type: "object",
     properties: {
