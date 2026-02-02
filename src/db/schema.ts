@@ -1,0 +1,36 @@
+import { Database } from 'better-sqlite3';
+
+export function initSchema(db: Database) {
+  // Enable Write-Ahead Logging (WAL) for better concurrency and performance
+  db.pragma('journal_mode = WAL');
+
+  // Create memories table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      source TEXT,
+      tags TEXT -- JSON string array
+    );
+  `);
+
+  // Create vector table using vec0
+  // Note: dimension is hardcoded to 384 (common for light models like all-MiniLM-L6-v2) 
+  // or 768 (OpenAI/Gemini). We'll assume 768 for now to be safe for larger models, 
+  // but this should match the embedding provider.
+  // For 'dummy' embeddings, we can just use 768 zeros.
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
+        embedding float[768]
+      );
+    `);
+  } catch (error) {
+    // If table exists but with different schema or generic verification failure, we might catch here.
+    // However, CREATE VIRTUAL TABLE IF NOT EXISTS usually handles existing tables gracefully 
+    // UNLESS the extensions isn't loaded.
+    console.error("Failed to create virtual vector table. Is sqlite-vec loaded?", error);
+    throw error;
+  }
+}
