@@ -70,9 +70,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 `INSERT INTO memories (id, content, tags) VALUES (?, ?, ?)`
             ).run(id, text, JSON.stringify(tags));
 
-            db.prepare(
-                `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
-            ).run(id, Buffer.from(float32Embedding.buffer));
+            try {
+                db.prepare(
+                    `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
+                ).run(id, Buffer.from(float32Embedding.buffer));
+            } catch (err) {
+                console.warn("Could not insert vector embedding (sqlite-vec might be missing):", err);
+            }
         });
         
         insertTx();

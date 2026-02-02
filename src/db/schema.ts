@@ -30,7 +30,7 @@ export function initSchema(db: Database) {
     // If table exists but with different schema or generic verification failure, we might catch here.
     // However, CREATE VIRTUAL TABLE IF NOT EXISTS usually handles existing tables gracefully 
     // UNLESS the extensions isn't loaded.
-    console.error("Failed to create virtual vector table. Is sqlite-vec loaded?", error);
-    throw error;
+    console.warn("Failed to create virtual vector table. sqlite-vec might not be loaded. Semantic search will fail.", error);
+    // Do NOT throw error, so the rest of the server (basic memory) can still work
   }
 }

@@ -10,7 +10,11 @@ export function getDb() {
   const db = new Database(DB_PATH);
   
   // Load sqlite-vec extension
-  sqliteVec.load(db);
+  try {
+    sqliteVec.load(db);
+  } catch (err) {
+    console.warn("Failed to load sqlite-vec extension. Vector search will not be available.", err);
+  }
   
   return db;
 }
