@@ -9,7 +9,7 @@ export interface Archivist {
 
 export class PassiveArchivist implements Archivist {
   async process(text: string): Promise<void> {
-    console.log(`[PassiveArchivist] Ignoring text: "${text.substring(0, 50)}..."`);
+    console.error(`[PassiveArchivist] Ignoring text: "${text.substring(0, 50)}..."`);
   }
 }
 
@@ -21,7 +21,7 @@ export class NlpArchivist implements Archivist {
   }
 
   async process(text: string): Promise<void> {
-    console.log(`[NlpArchivist] Processing: "${text.substring(0, 50)}..."`);
+    console.error(`[NlpArchivist] Processing: "${text.substring(0, 50)}..."`);
     const doc = nlp(text);
     
     // Improved extraction using tags and matches
@@ -32,7 +32,7 @@ export class NlpArchivist implements Archivist {
     // Catch-all for capitalized nouns that might be entities
     const nouns = doc.match('#ProperNoun').out('array');
 
-    console.log(`[Debug] Found - People: ${people.length}, Places: ${places.length}, Orgs: ${orgs.length}, Nouns: ${nouns.length}`);
+    console.error(`[Debug] Found - People: ${people.length}, Places: ${places.length}, Orgs: ${orgs.length}, Nouns: ${nouns.length}`);
 
     const ensureEntity = (name: string, type: string) => {
         const cleanName = name.replace(/[.,!?]$/, "").trim();
@@ -41,7 +41,7 @@ export class NlpArchivist implements Archivist {
         try {
             const id = uuidv4();
             this.db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, cleanName, type, '[]');
-            console.log(`[NlpArchivist] Extracted: ${cleanName} (${type})`);
+            console.error(`[NlpArchivist] Extracted: ${cleanName} (${type})`);
         } catch (e: any) {
              if (e.code !== 'SQLITE_CONSTRAINT_UNIQUE') console.error(e);
         }
@@ -66,7 +66,7 @@ export class LlmArchivist implements Archivist {
   }
 
   async process(text: string): Promise<void> {
-    console.log(`[LlmArchivist] Sending to LLM: "${text.substring(0, 50)}..."`);
+    console.error(`[LlmArchivist] Sending to LLM: "${text.substring(0, 50)}..."`);
     
     const prompt = `
       Extract entities and relationships from the following text.
@@ -100,7 +100,7 @@ export class LlmArchivist implements Archivist {
                  try {
                     const id = uuidv4();
                     this.db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, e.name, e.type, '[]');
-                     console.log(`[LlmArchivist] Created entity: ${e.name}`);
+                     console.error(`[LlmArchivist] Created entity: ${e.name}`);
                  } catch (err: any) { if (err.code !== 'SQLITE_CONSTRAINT_UNIQUE') console.error(err); }
             }
         }
@@ -120,7 +120,7 @@ export class LlmArchivist implements Archivist {
 
                  try {
                      this.db.prepare(`INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(r.source, r.target, r.relation);
-                     console.log(`[LlmArchivist] Created relation: ${r.source} -> ${r.relation} -> ${r.target}`);
+                     console.error(`[LlmArchivist] Created relation: ${r.source} -> ${r.relation} -> ${r.target}`);
                  } catch (err: any) { if (err.code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') console.error(err); }
             }
         }
