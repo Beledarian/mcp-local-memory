@@ -1,20 +1,42 @@
+import { pipeline } from '@xenova/transformers';
 
 export interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;
 }
 
 export class NoOpEmbedder implements EmbeddingProvider {
-  // Returns a zero vector of dimension 768
   async embed(text: string): Promise<number[]> {
     console.warn("Using NoOpEmbedder. Semantic search will not work effectively.");
-    return new Array(768).fill(0);
+    return new Array(384).fill(0);
   }
 }
 
-// TODO: Implement OpenAI or other providers here
-// export class OpenAIEmbedder implements EmbeddingProvider { ... }
+export class LocalEmbedder implements EmbeddingProvider {
+  private pipe: any;
+
+  async init() {
+    if (!this.pipe) {
+      // quantized: true is the default, loads ~23MB model
+      this.pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+    }
+  }
+
+  async embed(text: string): Promise<number[]> {
+    if (!this.pipe) await this.init();
+    
+    const result = await this.pipe(text, { pooling: 'mean', normalize: true });
+    // result is a Tensor { data: Float32Array(...) }
+    return Array.from(result.data);
+  }
+}
+
+let globalEmbedder: EmbeddingProvider | null = null;
 
 export const getEmbedder = (): EmbeddingProvider => {
-    // In the future, check env vars to decide which provider to use
-    return new NoOpEmbedder();
+    if (!globalEmbedder) {
+        // Switch to LocalEmbedder
+        console.error("Initializing Local Embeddings (all-MiniLM-L6-v2)...");
+        globalEmbedder = new LocalEmbedder();
+    }
+    return globalEmbedder;
 };

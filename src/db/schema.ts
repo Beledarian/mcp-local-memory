@@ -16,14 +16,11 @@ export function initSchema(db: Database) {
   `);
 
   // Create vector table using vec0
-  // Note: dimension is hardcoded to 384 (common for light models like all-MiniLM-L6-v2) 
-  // or 768 (OpenAI/Gemini). We'll assume 768 for now to be safe for larger models, 
-  // but this should match the embedding provider.
-  // For 'dummy' embeddings, we can just use 768 zeros.
+  // Note: dimension is hardcoded to 384 (all-MiniLM-L6-v2) 
   try {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS vec_items USING vec0(
-        embedding float[768]
+        embedding float[384]
       );
     `);
   } catch (error) {
