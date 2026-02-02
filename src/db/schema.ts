@@ -60,4 +60,27 @@ export function initSchema(db: Database) {
       INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
     END;
   `);
+
+  // Create entities table (Phase 2)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS entities (
+      id TEXT PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      type TEXT,
+      observations TEXT -- JSON array of strings (optional, to store facts about the entity)
+    );
+  `);
+
+  // Create relations table (Phase 2)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS relations (
+      source TEXT NOT NULL,
+      target TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(source) REFERENCES entities(name) ON DELETE CASCADE,
+      FOREIGN KEY(target) REFERENCES entities(name) ON DELETE CASCADE,
+      PRIMARY KEY (source, target, relation)
+    );
+  `);
 }

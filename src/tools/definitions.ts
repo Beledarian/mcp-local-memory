@@ -86,3 +86,43 @@ export const EXPORT_MEMORIES_TOOL: any = {
     required: ["path"]
   }
 };
+
+export const CREATE_ENTITY_TOOL: any = {
+  name: "create_entity",
+  description: "Create a new entity in the knowledge graph.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "Unique name of the entity." },
+      type: { type: "string", description: "Category/Type (e.g., Person, Location)." },
+      observations: { type: "array", items: { type: "string" }, description: "Initial observations/facts." }
+    },
+    required: ["name", "type"]
+  }
+};
+
+export const CREATE_RELATION_TOOL: any = {
+  name: "create_relation",
+  description: "Create a known relationship between two entities.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      source: { type: "string", description: "Name of the source entity." },
+      target: { type: "string", description: "Name of the target entity." },
+      relation: { type: "string", description: "Predicate (e.g., knows, visited)." }
+    },
+    required: ["source", "target", "relation"]
+  }
+};
+
+export const READ_GRAPH_TOOL: any = {
+  name: "read_graph",
+  description: "Read the local knowledge graph centered around an entity.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      center: { type: "string", description: "Name of the entity to center the search on (optional, lists all if empty)." },
+      depth: { type: "number", description: "Traversal depth (default 1)." } // Currently simple implementation
+    }
+  }
+};
