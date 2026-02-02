@@ -1,0 +1,17 @@
+# System Requirements for Local Memory MCP Server
+
+# Runtime
+node >= 18.0.0
+
+# Build Tools (Required for better-sqlite3 native compilation)
+python >= 3.10
+build-essential (Linux) / Visual Studio Build Tools (Windows)
+
+# Core JS Dependencies (Reference)
+@modelcontextprotocol/sdk
+better-sqlite3
+sqlite-vec
+@xenova/transformers
+compromise
+uuid
+zod
