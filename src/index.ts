@@ -19,12 +19,14 @@ import {
   RECALL_TOOL,
   REMEMBER_FACT_TOOL,
 } from "./tools/definitions.js";
+import { getArchivist } from "./lib/archivist.js";
 
 // Initialize DB
 const db = getDb();
 initSchema(db);
 
 const embedder = getEmbedder();
+const archivist = getArchivist(db);
 
 // Create server instance
 const server = new Server(
@@ -86,6 +88,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
         
         insertTx();
+
+        // 3. Trigger Archivist (Auto-Ingestion)
+        // Fire and forget - don't block the response
+        archivist.process(text).catch(err => console.error("Archivist error:", err));
 
         return {
           content: [
