@@ -226,7 +226,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const tags = (args?.tags as string[]) || [];
         const id = uuidv4();
         
-        // 1. Get embedding
+        // 1. Get embedding (pure semantic - tags handled in post-filter)
         const embedding = await embedder.embed(text);
         const float32Embedding = new Float32Array(embedding);
 
@@ -269,19 +269,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const embedding = await embedder.embed(query);
         const float32Embedding = new Float32Array(embedding);
 
-        // 2. Search
+        // 2. Search (fetch 2x for post-filtering)
         let results: any[] = [];
         let usedSearchMethod = "vector";
 
         try {
             // Attempt vector search
-            // Join back with memories table to get content
+            // Join back with memories table to get content + tags
             results = db
               .prepare(
                 `
                 SELECT 
                   m.id, 
-                  m.content, 
+                  m.content,
+                  m.tags,
                   m.created_at,
                   m.importance,
                   m.last_accessed,
@@ -294,7 +295,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 LIMIT ?
                 `
               )
-              .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit) as any[];
+              .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit * 2) as any[];
+              
+             // Option 3: Boost exact tag matches
+             const tagBoost = parseFloat(process.env.TAG_MATCH_BOOST || '0.15');
+             const queryLower = query.toLowerCase();
+             results = results.map(r => {
+                 try {
+                     const tags = JSON.parse(r.tags || '[]') as string[];
+                     const hasExactMatch = tags.some(tag => queryLower.includes(tag.toLowerCase()));
+                     return {
+                         ...r,
+                         score: r.score + (hasExactMatch ? tagBoost : 0)
+                     };
+                 } catch {
+                     return r;
+                 }
+             }).sort((a, b) => b.score - a.score).slice(0, limit);
               
              // Update Access Stats (Consolidation)
              if (results.length > 0) {
@@ -310,11 +327,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // 3. Fallback: If vector search failed or returned 0 results, try FTS
         if (results.length === 0) {
             usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
-            // Use FTS Match
-            // We use the raw query for matching. 
-            // Note: FTS5 query syntax is powerful but can error on special chars. 
-            // Simple sanitization: remove non-alphanumeric chars or just wrap in quotes if needed.
-            // For now, we utilize the query as is, but wrapped in quotes to treat as phrase or simple tokens.
+            
+            // Tokenize query for FTS5
+            // Multi-word queries like "performance optimizations preference" should become
+            // "performance OR optimizations OR preference" for better recall
+            const tokenizeFTSQuery = (q: string): string => {
+                // Remove special FTS5 characters and split into tokens
+                const tokens = q
+                    .replace(/[^\w\s]/g, ' ') // Remove special chars
+                    .split(/\s+/) // Split on whitespace
+                    .filter(t => t.length > 0) // Remove empty tokens
+                    .map(t => `"${t}"`); // Quote each token to handle as literal
+                
+                // Join with OR for broader matching
+                return tokens.length > 0 ? tokens.join(' OR ') : q;
+            };
+            
+            const ftsQuery = tokenizeFTSQuery(query);
+            
             const ftsResults = db.prepare(`
                 SELECT 
                     id, 
@@ -326,7 +356,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 WHERE memories_fts MATCH ? 
                 ORDER BY rank
                 LIMIT ?
-            `).all(query, limit) as any[];
+            `).all(ftsQuery, limit) as any[];
             
             results = ftsResults;
         }

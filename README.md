@@ -53,6 +53,7 @@ Control the server behavior via environment variables:
 | `CONTEXT_MAX_MEMORIES` | Integer | `5` | Max recent memories in context. |
 | `OLLAMA_URL` | URL string | `http://localhost:11434` | Endpoint for the LLM strategy. |
 | `USE_WORKER` | `true`, `false` | `true` | Run Archivist in a background thread to prevent blocking. |
+| `TAG_MATCH_BOOST` | Float | `0.15` | Score boost for exact tag matches in `recall` results. Higher = stronger tag priority. |
 
 ## Quick Start Configuration (Standard)
 
@@ -140,6 +141,12 @@ The server exposes the following MCP tools:
 The server automatically detects project names like "Project Alpha" or "Operation X" and tags memories with them.
 - **Search**: `recall("Project Alpha")` will prioritize these memories.
 - **Graph**: A node of type `Project` is created automatically.
+
+#### Tag Priority Matching
+When using `recall`, memories with exact tag matches get a score boost for better ranking.
+- **Default Boost**: `0.15` (configurable via `TAG_MATCH_BOOST`)
+- **Example**: Query "performance" will rank memories tagged `["performance", "optimization"]` higher
+- **Pure Semantic**: Content embeddings remain clean; tag matching happens in post-filter for transparency
 
 #### Memory Decay & Consolidation
 Memories fade over time unless accessed.
