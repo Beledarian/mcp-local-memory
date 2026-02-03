@@ -54,6 +54,9 @@ Control the server behavior via environment variables:
 | `OLLAMA_URL` | URL string | `http://localhost:11434` | Endpoint for the LLM strategy. |
 | `USE_WORKER` | `true`, `false` | `true` | Run Archivist in a background thread to prevent blocking. |
 | `TAG_MATCH_BOOST` | Float | `0.15` | Score boost for exact tag matches in `recall` results. Higher = stronger tag priority. |
+| `MEMORY_HALF_LIFE_WEEKS` | Float | `4.0` | Weeks until memory importance decays to 50%. Longer = slower decay. |
+| `MEMORY_CONSOLIDATION_FACTOR` | Float | `1.0` | Strength of access-based consolidation. Higher = frequently-used memories resist decay more. |
+| `MEMORY_SEMANTIC_WEIGHT` | Float | `0.7` | Balance between semantic similarity (0.7) and decayed importance (0.3) in recall ranking. |
 
 ## Quick Start Configuration (Standard)
 
@@ -125,6 +128,8 @@ The server exposes the following MCP tools:
 ### Memory Management
 -   **`remember_fact(text, tags?)`**: Saves a new piece of information.
 -   **`recall(query, limit?)`**: Search for relevant past entries via Vector or FTS search.
+    - **Automatic Tracking**: Updates `access_count` (+1) and `last_accessed` (timestamp) for all returned memories
+    - **Feeds Consolidation**: Frequently-recalled memories gain stability and resist decay
 -   **`list_recent_memories(limit?)`**: View the latest context.
 -   **`forget(memory_id)`**: Delete a specific entry.
 -   **`export_memories(path)`**: Backup all data to a JSON file.
@@ -149,9 +154,29 @@ When using `recall`, memories with exact tag matches get a score boost for bette
 - **Pure Semantic**: Content embeddings remain clean; tag matching happens in post-filter for transparency
 
 #### Memory Decay & Consolidation
-Memories fade over time unless accessed.
-- **Half-Life**: 4 weeks (configurable).
-- **Consolidation**: Frequently accessed memories become "stable" and resist decay.
+Memories fade over time unless accessed, mimicking human memory consolidation through a **use-it-or-lose-it** system.
+
+**How It Works:**
+- **Automatic Tracking**: Every time `recall` returns a memory, two fields are updated:
+  - `access_count` → Incremented by +1
+  - `last_accessed` → Set to current timestamp
+- **Stability Formula**: `stability = halfLife * (1 + consolidation * log2(access_count + 1))`
+- **Decay Calculation**: `decayedImportance = importance * pow(0.5, weeks / stability)`
+
+**Result**: Frequently-recalled memories become more **stable** and resist decay. Memories you never use gradually fade from search results.
+
+**Configuration:**
+- **Half-Life**: 4 weeks (configurable via `MEMORY_HALF_LIFE_WEEKS`)
+- **Consolidation Factor**: 1.0 (configurable via `MEMORY_CONSOLIDATION_FACTOR`)
+- **Semantic Weight**: 0.7 (configurable via `MEMORY_SEMANTIC_WEIGHT`)
+
+**Example Timeline:**
+```
+Day 1:  recall("python") → Memory A: access_count=1, importance=0.8
+Day 7:  recall("coding") → Memory A: access_count=2, stability↑
+Day 30: Memory A maintains relevance due to high access_count
+Day 90: Unused memories decay to 50% importance (one half-life)
+```
 
 #### Mixed Topic Clustering
 Group your knowledge into thematic clusters to see the big picture.
