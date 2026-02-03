@@ -26,7 +26,8 @@ export function initSchema(db: Database) {
   }
   if (!memoriesInfo.some(col => col.name === 'last_accessed')) {
       console.error("[Schema] Migrating: Adding 'last_accessed' to memories table");
-      db.exec('ALTER TABLE memories ADD COLUMN last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP');
+      // Note: SQLite doesn't allow expressions like CURRENT_TIMESTAMP as defaults in ALTER TABLE on older versions
+      db.exec('ALTER TABLE memories ADD COLUMN last_accessed DATETIME');
       db.exec('UPDATE memories SET last_accessed = created_at WHERE last_accessed IS NULL');
   }
   if (!memoriesInfo.some(col => col.name === 'access_count')) {

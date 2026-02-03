@@ -239,7 +239,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         // 2. Insert into DB transactionally
         const insertTx = db.transaction(() => {
             db.prepare(
-                `INSERT INTO memories (id, content, tags) VALUES (?, ?, ?)`
+                `INSERT INTO memories (id, content, tags, last_accessed, importance) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0.5)`
             ).run(id, text, JSON.stringify(tags));
 
             try {
