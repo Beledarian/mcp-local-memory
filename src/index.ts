@@ -32,7 +32,10 @@ import {
   ADD_TASK_TOOL,
   UPDATE_TASK_STATUS_TOOL,
   LIST_TASKS_TOOL,
-  DELETE_TASK_TOOL
+  DELETE_TASK_TOOL,
+  DELETE_RELATION_TOOL,
+  DELETE_ENTITY_TOOL,
+  UPDATE_ENTITY_TOOL
 } from "./tools/definitions.js";
 import { getArchivist } from "./lib/archivist.js";
 import * as taskHandlers from './tools/task_handlers.js';
@@ -483,6 +486,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     UPDATE_TASK_STATUS_TOOL,
     LIST_TASKS_TOOL,
     DELETE_TASK_TOOL,
+    DELETE_RELATION_TOOL,
+    DELETE_ENTITY_TOOL,
+    UPDATE_ENTITY_TOOL,
   ];
 
   // consolidate_context is opt-in via environment variable
@@ -1226,6 +1232,108 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   text: JSON.stringify(taskHandlers.handleDeleteTask(db, args as any), null, 2)
               }]
           };
+
+      case "delete_relation": {
+          const source = args?.source as string;
+          const target = args?.target as string;
+          const relation = args?.relation as string;
+
+          const res = db.prepare("DELETE FROM relations WHERE source = ? AND target = ? AND relation = ?").run(source, target, relation);
+          
+          if (res.changes === 0) {
+              return { content: [{ type: "text", text: `Relation not found: ${source} --[${relation}]--> ${target}` }], isError: true };
+          }
+          
+          return {
+              content: [{ type: "text", text: `Deleted relation: ${source} --[${relation}]--> ${target}` }]
+          };
+      }
+
+      case "delete_entity": {
+          const name = args?.name as string;
+          
+          const entity = db.prepare("SELECT id FROM entities WHERE name = ?").get(name) as any;
+          if (!entity) {
+               return { content: [{ type: "text", text: `Entity '${name}' not found.` }], isError: true };
+          }
+          
+          const tx = db.transaction(() => {
+              // 1. Delete observations
+              db.prepare("DELETE FROM entity_observations WHERE entity_id = ?").run(entity.id);
+              // 2. Delete relations
+              db.prepare("DELETE FROM relations WHERE source = ? OR target = ?").run(name, name);
+              // 3. Delete vector embedding
+              const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
+              if (rowid) {
+                   db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
+              }
+              // 4. Delete entity
+              db.prepare("DELETE FROM entities WHERE id = ?").run(entity.id);
+          });
+          tx();
+          
+          return {
+              content: [{ type: "text", text: `Deleted entity '${name}' and all associated data.` }]
+          };
+      }
+      
+      case "update_entity": {
+          const currentName = args?.current_name as string;
+          const newName = args?.new_name as string | undefined;
+          const newType = args?.new_type as string | undefined;
+          
+          const entity = db.prepare("SELECT id, name, type FROM entities WHERE name = ?").get(currentName) as any;
+          if (!entity) {
+               return { content: [{ type: "text", text: `Entity '${currentName}' not found.` }], isError: true };
+          }
+          
+          const updates: string[] = [];
+          const params: (string | undefined)[] = [];
+          
+          if (newName && newName !== currentName) {
+              updates.push("name = ?");
+              params.push(newName);
+          }
+          if (newType && newType !== entity.type) {
+              updates.push("type = ?");
+              params.push(newType);
+          }
+          
+          if (updates.length > 0) {
+              const tx = db.transaction(() => {
+                  db.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id = ?`).run(...params, entity.id);
+                  
+                  if (newName && newName !== currentName) {
+                      db.prepare("UPDATE relations SET source = ? WHERE source = ?").run(newName, currentName);
+                      db.prepare("UPDATE relations SET target = ? WHERE target = ?").run(newName, currentName);
+                  }
+                  
+                  // Re-embed if necessary
+                  if ((newName && newName !== currentName) || (newType && newType !== entity.type)) {
+                       const finalName = newName || currentName;
+                       const finalType = newType || entity.type;
+                       
+                       embedder.embed(finalName + " " + finalType).then(vec => {
+                           const float32 = new Float32Array(vec);
+                           try {
+                               const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
+                               if (rowid) {
+                                   db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
+                                   db.prepare("INSERT INTO vec_entities (rowid, embedding) VALUES (?, ?)").run(rowid.rowid, Buffer.from(float32.buffer));
+                               }
+                           } catch(e) { console.error("Re-embedding failed", e); }
+                      }).catch(e => console.error("Re-embedding generation failed", e));
+                  }
+              });
+              tx();
+              
+              return {
+                  content: [{ type: "text", text: `Updated entity '${currentName}'` }]
+              };
+          } else {
+              return { content: [{ type: "text", text: "No changes requested." }] };
+          }
+      }
 
       default:
         throw new Error(`Unknown tool: ${name}`);

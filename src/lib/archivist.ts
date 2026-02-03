@@ -76,10 +76,17 @@ export class NlpArchivist implements Archivist {
   private db: Database;
   private embedder?: EmbedderFn;
   private insertTransaction: (data: any) => void;
+  private language: string;
 
-  constructor(db: Database, embedder?: EmbedderFn) {
+  constructor(db: Database, embedder?: EmbedderFn, language: string = 'en') {
     this.db = db;
     this.embedder = embedder;
+    this.language = language;
+    
+    // Warn if non-English
+    if (this.language !== 'en') {
+        console.warn(`[NlpArchivist] Language '${this.language}' requested, but only 'en' is fully supported by the current NLP engine.`);
+    }
     
     // Pre-compile the transaction for performance/atomicity
     this.insertTransaction = this.db.transaction((data: any) => {
@@ -176,14 +183,70 @@ export class NlpArchivist implements Archivist {
         });
     }
     
-    // 3. Normalized Nouns (Soft Entity)
-    // We want to avoid "Perfectly written WGSL" as the entity name. We want "WGSL".
-    // Strategy: Split by space and take the last word if it's a noun? OR rely on strict cleaning.
-    // Let's use a filter for "Concepts".
-    const nouns = doc.nouns().out('array')
-        .map((n: string) => n.replace(/^.*\s+([A-Z][a-z]+)$/, "$1")) // Naive head-finding
-        .filter((n: string) => /^[A-Z]/.test(n)) // Keep only capitalized concepts for now to reduce noise
-        .filter((n: string) => n.length > 2);
+    // 3. General Concepts (Capitalized Nouns)
+    // Capture things like "WorkerArchivist", "DbPath", "Strategies".
+    // Strategy: Filter for capitalized noun terms.
+    const concepts = doc.match('#Noun')
+        .not('#Pronoun')
+        .terms().out('array')
+        .map((n: string) => n.replace(/[.,!?]$/, "")) // Remove trailing punctuation
+        .filter((n: string) => /^[A-Z][a-zA-Z0-9-]*$/.test(n)) // Allow CamelCase and hyphens
+        .filter((n: string) => n.length > 2 && !['The', 'This', 'That'].includes(n))
+        .filter((n: string) => !n.endsWith('-')); // Remove if ends with lone hyphen
+
+    // 4. Complex Concepts (Modifiers + Capitalized Noun)
+    // Captures: "optimized WGSL", "perfectly written WGSL", "fast Code"
+    // Strategy: Look for modifier chains (Adj/Verb/Adverb) directly before a Capitalized Noun
+    // But exclude the main sentence verb by using a more targeted pattern
+    // OPT-OUT: Can be disabled via EXTRACT_COMPLEX_CONCEPTS=false
+    const complexConcepts: string[] = [];
+    const extractComplexConcepts = process.env.EXTRACT_COMPLEX_CONCEPTS !== 'false';
+    
+    if (extractComplexConcepts) {
+        // Pattern 1: #Verb #Noun (e.g., "optimized WGSL")
+        doc.match('#Verb #Noun').forEach((match: any) => {
+            const text = typeof match.text === 'function' ? match.text() : match.text;
+            if (typeof text === 'string') {
+                const terms = text.split(' ');
+                const head = terms[terms.length - 1].replace(/[.,!?]$/, "");
+                if (/^[A-Z][a-zA-Z0-9-]*$/.test(head) && !head.endsWith('-') && terms.length > 1) {
+                    complexConcepts.push(text.replace(/[.,!?]$/, ""));
+                }
+            }
+        });
+        
+        // Pattern 2: #Adverb #Verb #Noun (e.g., "perfectly written WGSL")
+        doc.match('#Adverb #Verb #Noun').forEach((match: any) => {
+            const text = typeof match.text === 'function' ? match.text() : match.text;
+            if (typeof text === 'string') {
+                const terms = text.split(' ');
+                const head = terms[terms.length - 1].replace(/[.,!?]$/, "");
+                if (/^[A-Z][a-zA-Z0-9-]*$/.test(head) && !head.endsWith('-') && terms.length > 1) {
+                    complexConcepts.push(text.replace(/[.,!?]$/, ""));
+                }
+            }
+        });
+        
+        // Pattern 3: #Adjective #Noun (e.g., "fast Code")
+        doc.match('#Adjective #Noun').forEach((match: any) => {
+            const text = typeof match.text === 'function' ? match.text() : match.text;
+            if (typeof text === 'string') {
+                const terms = text.split(' ');
+                const head = terms[terms.length - 1].replace(/[.,!?]$/, "");
+                if (/^[A-Z][a-zA-Z0-9-]*$/.test(head) && !head.endsWith('-') && terms.length > 1) {
+                    complexConcepts.push(text.replace(/[.,!?]$/, ""));
+                }
+            }
+        });
+    }
+
+    // 5. Standalone Adjectives (Quality/Traits)
+    // Captures: "optimistic", "pragmatic", "efficient" as standalone concepts
+    // Useful for tracking user preferences and traits
+    const adjectives = doc.adjectives()
+        .out('array')
+        .map((adj: string) => adj.replace(/[.,!?]$/, ""))
+        .filter((adj: string) => adj.length > 3); // Filter short/common words
 
     // Create Typed Entities
     const rawEntities = [
@@ -192,8 +255,28 @@ export class NlpArchivist implements Archivist {
         ...orgs.map((n: string) => ({ name: n, type: 'Organization' })),
         ...projects.map((n: string) => ({ name: n, type: 'Project' })),
         ...acronyms.map((n: string) => ({ name: n, type: 'Concept' })),
-        ...nouns.map((n: string) => ({ name: n, type: 'Entity' }))
+        ...concepts.map((n: string) => ({ name: n, type: 'Concept' })),
+        ...complexConcepts.map((n: string) => ({ name: n, type: 'Concept' })),
+        ...adjectives.map((n: string) => ({ name: n, type: 'Trait' }))
     ];
+    
+    // 6. Hyphenated Compounds Reconstruction
+    // compromise splits "LLM-powered" into ["LLM", "powered"], we need to stitch them back
+    // Strategy: Look for capitalized terms followed by another term with a hyphen between them in original text
+    const hyphenatedCompounds: Array<{name: string, type: string}> = [];
+    const hyphenTextStr = typeof doc.text === 'function' ? doc.text() : doc.text || '';
+    
+    if (typeof hyphenTextStr === 'string') {
+        // Match patterns like "LLM-powered", "PDF-parser", "WebGPU-based"
+        // Must start with capital, then hyphen, then lowercase word
+        const compoundMatches = hyphenTextStr.matchAll(/\b([A-Z][A-Za-z0-9]*)-([a-z][a-z]*)\b/g);
+        for (const match of compoundMatches) {
+            const compound = match[0]; // e.g., "LLM-powered"
+            hyphenatedCompounds.push({ name: compound, type: 'Concept' });
+        }
+    }
+    
+    rawEntities.push(...hyphenatedCompounds);
     
     // Clean & Dedupe
     const stopWords = new Set(['The', 'A', 'An', 'This', 'That', 'These', 'Those', 'In', 'On']);
@@ -238,6 +321,7 @@ export class NlpArchivist implements Archivist {
         if (sentEntities.length >= 2) {
              const sDoc = nlp(sentText);
              let verb = '';
+             let isPassive = false;
              
              // Check explicit emotional/structural verbs first
              if (sDoc.match('(hate|hates|loathe|loathes)').found) verb = 'hates';
@@ -246,19 +330,36 @@ export class NlpArchivist implements Archivist {
              else if (sDoc.match('(like|likes|prefer|prefers|enjoy)').found) verb = 'likes';
              else if (sDoc.match('(contains|includes|consists of|has)').found) verb = 'contains';
              else if (sDoc.match('(uses|utilizes|employs|using)').found) verb = 'uses';
+             else if (sDoc.match('(requires|needs)').found) verb = 'requires';
              
+             // Passive Voice Detection
+             if (sDoc.match('(is used by|used by)').found) { verb = 'uses'; isPassive = true; }
+             else if (sDoc.match('(is created by|created by|made by|authored by)').found) { verb = 'authored'; isPassive = true; }
+             else if (sDoc.match('(is owned by|owned by)').found) { verb = 'owns'; isPassive = true; }
+             else if (sDoc.match('(run on|runs on)').found) { verb = 'runs_on'; isPassive = false; } // Active: Server -> runs_on -> Linux
+
              // Fallback to first main verb if no specific one found
              if (!verb) {
                  verb = sDoc.verbs().first().out('normal') || 'related_to';
+                 if (verb.includes(" by")) isPassive = true;
              }
              
              // Normalize Verb
-             const cleanVerb = verb; // Already normalized if hit above, or 'normal' from compromise
+             const cleanVerb = verb.replace(' by', ''); 
 
-             // Source is first entity, others are targets
-             const source = sentEntities[0].name;
-             for (let i = 1; i < sentEntities.length; i++) {
-                 relations.push({ source, target: sentEntities[i].name, relation: cleanVerb });
+             if (isPassive) {
+                 // Passive: "Python (0) is used by Laurin (1)". Source = Laurin (last), Target = Python (others)
+                 // Passive: "A (0) and B (1) are used by C (2)". Source = C, Targets = A, B
+                 const source = sentEntities[sentEntities.length - 1].name;
+                 for (let i = 0; i < sentEntities.length - 1; i++) {
+                     relations.push({ source, target: sentEntities[i].name, relation: cleanVerb });
+                 }
+             } else {
+                 // Active: "Laurin (0) uses A (1) and B (2)". Source = Laurin, Targets = A, B
+                 const source = sentEntities[0].name;
+                 for (let i = 1; i < sentEntities.length; i++) {
+                     relations.push({ source, target: sentEntities[i].name, relation: cleanVerb });
+                 }
              }
         }
     });

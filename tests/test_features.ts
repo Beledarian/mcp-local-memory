@@ -25,6 +25,7 @@ async function runIntegrationTest() {
     const Database = (await import('better-sqlite3')).default;
     // @ts-ignore
     const db = new Database(dbPath);
+    db.pragma('foreign_keys = ON');
     
     // Initialize Schema manually for full control (Bypass initSchema to avoid partial state)
     // const { initSchema } = await import('./src/db/schema.js');
@@ -74,7 +75,7 @@ async function runIntegrationTest() {
         db.exec(`
             CREATE TABLE IF NOT EXISTS entities (
                 id TEXT PRIMARY KEY,
-                name TEXT,
+                name TEXT UNIQUE,
                 type TEXT,
                 observations TEXT,
                 importance FLOAT DEFAULT 0.5
@@ -82,10 +83,21 @@ async function runIntegrationTest() {
         `);
         db.exec(`
             CREATE TABLE IF NOT EXISTS relations (
-                source TEXT,
-                target TEXT,
-                relation TEXT,
+                source TEXT NOT NULL,
+                target TEXT NOT NULL,
+                relation TEXT NOT NULL,
+                FOREIGN KEY(source) REFERENCES entities(name) ON DELETE CASCADE ON UPDATE CASCADE,
+                FOREIGN KEY(target) REFERENCES entities(name) ON DELETE CASCADE ON UPDATE CASCADE,
                 PRIMARY KEY (source, target, relation)
+            );
+        `);
+        db.exec(`
+             CREATE TABLE IF NOT EXISTS entity_observations (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              entity_id TEXT NOT NULL,
+              content TEXT NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY(entity_id) REFERENCES entities(id) ON DELETE CASCADE
             );
         `);
     } catch (e) { console.error("Manual table creation failed:", e); }
@@ -243,6 +255,88 @@ async function runIntegrationTest() {
         const allRels = db.prepare("SELECT * FROM relations").all();
         console.error("❌ Relation Missing. Found:", allRels);
     }
+    
+    // ---------------------------------------------------------
+    // TEST 5: Graph Management (Delete/Update)
+    // ---------------------------------------------------------
+    console.log("\n[Test 5] Graph Management Tools...");
+    
+    // Setup Graph Data for Test 5
+    const idA = uuidv4();
+    const idB = uuidv4();
+    const idC = uuidv4();
+    
+    // Note: Manual mock API for tools logic (duplicating logic from index.ts for integration check)
+    // In a real e2e we'd call the MCP tool handler, but here we verify the logic directly against DB constraints
+    
+    db.prepare("INSERT INTO entities (id, name, type) VALUES (?, ?, ?)").run(idA, 'EntityA', 'Test');
+    db.prepare("INSERT INTO entities (id, name, type) VALUES (?, ?, ?)").run(idB, 'EntityB', 'Test');
+    db.prepare("INSERT INTO entities (id, name, type) VALUES (?, ?, ?)").run(idC, 'EntityC', 'Test');
+    
+    db.prepare("INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)").run('EntityA', 'EntityB', 'relates_to');
+    db.prepare("INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)").run('EntityA', 'EntityC', 'links_to');
+    
+    // 1. Test Delete Relation
+    console.log("-> Testing Delete Relation...");
+    db.prepare("DELETE FROM relations WHERE source = ? AND target = ? AND relation = ?").run('EntityA', 'EntityB', 'relates_to');
+    const checkRel1 = db.prepare("SELECT * FROM relations WHERE source = 'EntityA' AND target = 'EntityB'").get();
+    if (!checkRel1) console.log("✅ Relation deleted.");
+    else console.error("❌ Relation delete failed.");
+
+    // 2. Test Cascade Delete Entity
+    console.log("-> Testing Delete Entity (Cascade)...");
+    // Logic: Delete observations + relations + vec + entity
+    db.transaction(() => {
+        db.prepare("DELETE FROM relations WHERE source = ? OR target = ?").run('EntityC', 'EntityC');
+        db.prepare("DELETE FROM entities WHERE id = ?").run(idC);
+    })();
+    
+    const checkEntityC = db.prepare("SELECT * FROM entities WHERE name = 'EntityC'").get();
+    const checkRelC = db.prepare("SELECT * FROM relations WHERE target = 'EntityC'").get();
+    
+    if (!checkEntityC && !checkRelC) console.log("✅ Entity delete cascaded correctly.");
+    else console.error("❌ Entity delete cascade failed:", { entity: !!checkEntityC, rel: !!checkRelC });
+    
+    // Add a surviving relation for Step 3 verification
+    db.prepare("INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)").run('EntityA', 'EntityB', 'survives');
+    
+    // 3. Test Update Entity (Rename + Cascade)
+    console.log("-> Testing Update Entity (Rename)...");
+    try {
+        const currentName = 'EntityA';
+        const newName = 'EntityNewA';
+        const entityA = db.prepare("SELECT id FROM entities WHERE name = ?").get(currentName) as any;
+        
+        // Update Entity
+        db.prepare("UPDATE entities SET name = ? WHERE id = ?").run(newName, entityA.id);
+        
+        // Verify Relations updated automatically (via ON UPDATE CASCADE)? 
+        // Note: better-sqlite3 by default enables foreign keys if configured? 
+        // We need to enable it explicitly usually: db.pragma('foreign_keys = ON');
+        // Let's check if our schema setup enables it. schema.ts does NOT enable it globally, 
+        // but let's see if sqlite handles it. If not, our tool logic handles it manually.
+        // INTEGRATION CHECK: Does the tool logic (manual update) work?
+        
+        // Manual update simulation as per tool implementation:
+        // Note: If CASCADE is on, these manual updates update nothing (0 changes) but that's fine.
+        db.prepare("UPDATE relations SET source = ? WHERE source = ?").run(newName, currentName);
+        db.prepare("UPDATE relations SET target = ? WHERE target = ?").run(newName, currentName);
+        
+        const checkRenamed = db.prepare("SELECT * FROM entities WHERE name = ?").get(newName);
+        const checkRelRenamed = db.prepare("SELECT * FROM relations WHERE source = ?").get(newName);
+        
+        if (!checkRenamed || !checkRelRenamed) {
+            console.log("DEBUG: Entities:", db.prepare("SELECT * FROM entities").all());
+            console.log("DEBUG: Relations:", db.prepare("SELECT * FROM relations").all());
+        }
+
+        if (checkRenamed && checkRelRenamed) console.log("✅ Entity update verified.");
+        else console.error("❌ Update failed:", { entity: !!checkRenamed, rel: !!checkRelRenamed });
+        
+    } catch (e: any) {
+        console.error("❌ Update test error:", e.message);
+    }
+
     
     console.log("\n=== Integration Test Complete ===");
     process.exit(0);

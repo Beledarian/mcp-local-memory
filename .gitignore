@@ -15,6 +15,9 @@ diagnose_*.ts
 list_memories_*.ts
 check_schema.ts
 fix_triggers.ts
+find_*.ts
+fix_*.ts
+debug_*.ts
 export_*.json
 *.log
 .DS_Store

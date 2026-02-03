@@ -2,7 +2,16 @@ import { Database } from 'better-sqlite3';
 
 export function initSchema(db: Database) {
   // Enable Write-Ahead Logging (WAL) for better concurrency and performance
-  db.pragma('journal_mode = WAL');
+  try {
+    db.pragma('journal_mode = WAL');
+  } catch (err) {
+    console.warn("[Schema] Failed to enable WAL mode. This is expected if the database is on a Windows mount in WSL. Falling back to DELETE mode.", err);
+    try {
+      db.pragma('journal_mode = DELETE');
+    } catch (fallbackErr) {
+      console.error("[Schema] Failed to fall back to DELETE mode:", fallbackErr);
+    }
+  }
 
   // Create memories table
   db.exec(`
@@ -115,8 +124,8 @@ export function initSchema(db: Database) {
       target TEXT NOT NULL,
       relation TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(source) REFERENCES entities(name) ON DELETE CASCADE,
-      FOREIGN KEY(target) REFERENCES entities(name) ON DELETE CASCADE,
+      FOREIGN KEY(source) REFERENCES entities(name) ON DELETE CASCADE ON UPDATE CASCADE,
+      FOREIGN KEY(target) REFERENCES entities(name) ON DELETE CASCADE ON UPDATE CASCADE,
       PRIMARY KEY (source, target, relation)
     );
      CREATE TABLE IF NOT EXISTS entity_observations (
@@ -135,6 +144,30 @@ export function initSchema(db: Database) {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  // Migration: Add ON UPDATE CASCADE to relations if missing
+  // We can check if we can run a dummy update or checking SQL
+  // Easier: check sql from sqlite_master
+  const relationsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='relations'").get() as any;
+  if (relationsSql && !relationsSql.sql.includes('ON UPDATE CASCADE')) {
+      console.log("[Schema] Migrating: Recreating relations table with ON UPDATE CASCADE");
+      db.transaction(() => {
+          db.exec("ALTER TABLE relations RENAME TO relations_old");
+          db.exec(`
+            CREATE TABLE relations (
+              source TEXT NOT NULL,
+              target TEXT NOT NULL,
+              relation TEXT NOT NULL,
+              created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY(source) REFERENCES entities(name) ON DELETE CASCADE ON UPDATE CASCADE,
+              FOREIGN KEY(target) REFERENCES entities(name) ON DELETE CASCADE ON UPDATE CASCADE,
+              PRIMARY KEY (source, target, relation)
+            )
+          `);
+          db.exec("INSERT INTO relations SELECT * FROM relations_old");
+          db.exec("DROP TABLE relations_old");
+      })();
+  }
 
   // Migration: Move JSON observations to new table if needed
   try {

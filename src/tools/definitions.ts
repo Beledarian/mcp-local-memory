@@ -355,3 +355,43 @@ export const DELETE_TASK_TOOL: any = {
 };
 
 
+
+export const DELETE_RELATION_TOOL: any = {
+  name: "delete_relation",
+  description: "Delete a relationship link between two entities. Use this to cleanup incorrect connections.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      source: { type: "string", description: "The name of the source entity." },
+      target: { type: "string", description: "The name of the target entity." },
+      relation: { type: "string", description: "The verb describing the relationship (e.g., 'uses', 'is_not')." }
+    },
+    required: ["source", "target", "relation"]
+  }
+};
+
+export const DELETE_ENTITY_TOOL: any = {
+  name: "delete_entity",
+  description: "Delete an entity and all its relations. Use this to remove incorrect or duplicate entities (like 'NOT').",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: { type: "string", description: "The name of the entity to delete." }
+    },
+    required: ["name"]
+  }
+};
+
+export const UPDATE_ENTITY_TOOL: any = {
+  name: "update_entity",
+  description: "Update an entity's name or type.",
+  inputSchema: {
+    type: "object",
+    properties: {
+        current_name: { type: "string", description: "The current name of the entity." },
+        new_name: { type: "string", description: "The new name (optional)." },
+        new_type: { type: "string", description: "The new type (optional)." }
+    },
+    required: ["current_name"]
+  }
+}; // New tools added

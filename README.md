@@ -12,7 +12,10 @@ A lightweight, privacy-first, "Zero-Docker" memory server for AI agents. This se
 -   **The Archivist**: Configurable "Auto-Ingestion" strategies for automatic graph building.
 -   **Privacy-First**: Zero data leaves your machine. No mandatory cloud APIs.
 -   **Resource Efficient**: ~50MB - 200MB RAM usage. Optimized with `Float32Array` buffers. 
--   **Improved NLP Extraction**: Optimized extraction of entities and relations using atomic transactions, robust pattern matching (e.g. for Projects), and sentence-aware relation linking. 
+-   **Enhanced NLP Extraction**: Extracts complex concepts ("optimized WGSL"), adjectives ("pragmatic"), entities, and relations with robust pattern matching.
+-   **Time Tunnel**: Natural language date querying (e.g., "last week", "in 2025") for temporal recall.
+-   **Todo System**: Integrated task management with automatic context injection and memory archival.
+-   **Entity Observations**: Normalized storage with "Smart Append" for evolving entity knowledge. 
 
 ## 🌐 Cross-Agent Shared Context
 
@@ -59,6 +62,8 @@ Control the server behavior via environment variables:
 | `MEMORY_HALF_LIFE_WEEKS` | Float | `4.0` | Weeks until memory importance decays to 50%. Longer = slower decay. |
 | `MEMORY_CONSOLIDATION_FACTOR` | Float | `1.0` | Strength of access-based consolidation. Higher = frequently-used memories resist decay more. |
 | `MEMORY_SEMANTIC_WEIGHT` | Float | `0.7` | Balance between semantic similarity (0.7) and decayed importance (0.3) in recall ranking. |
+| `EXTRACT_COMPLEX_CONCEPTS` | `true`, `false` | `true` | Enable extraction of modifier+noun phrases (e.g., "optimized WGSL"). Set to `false` to disable. |
+| `CONTEXT_TODO_LIMIT` | Integer | `3` | Max pending todos shown in `memory://current-context`. |
 
 ## Quick Start Configuration (Standard)
 
@@ -87,13 +92,12 @@ To enable AI-powered entity extraction, importance scoring, and auto-labeling, r
 {
   "mcpServers": {
     "local-memory": {
-      "command": "node",
-      "args": ["/path/to/mcp-local-memory/dist/index.js"],
+      "command": "wsl",
+      "args": ["/home/username/.nvm/versions/node/v20.11.1/bin/node", "/home/username/mcp-local-memory/dist/index.js"],
       "env": {
-        "ARCHIVIST_STRATEGY": "nlp,llm",
-        "OLLAMA_URL": "http://localhost:11434/api/generate",
-        "CONTEXT_WINDOW_LIMIT": "2000",
-        "USE_WORKER": "true"
+        "MEMORY_DB_PATH": "/home/username/.memory/memory.db",
+        "ARCHIVIST_STRATEGY": "nlp",
+        "ARCHIVIST_LANGUAGE": "en"  // Optional: Default is 'en'
       }
     }
   }
@@ -109,26 +113,15 @@ You can combine multiple strategies by separating them with a comma (e.g. `nlp,l
 
 ---
 
+
+---
+
 ## 💡 Recommended System Prompt
 
-To get the most out of this memory server, instruct your agent to check the context resource at the start of every interaction.
+For effective agent interaction with this memory server, we recommend using a detailed system prompt.
 
-example_prompt.md
-
-**Add this to your System Prompt / Custom Instructions [(Full Detailed Example Propmt in File)](example_prompt.md):**
-
-> You have access to a long-term memory via the `local-memory` tool server.
-> 
-> **CRITICAL: Be proactive with memory! Call `remember_fact` FREQUENTLY whenever the user shares important information.**
-> 
-> 1.  **ALWAYS** read the resource `memory://current-context` at the start of every turn to understand the user's recent activities and important entities.
-> 2.  **PROACTIVELY** use `remember_fact` to save new information. **USE `remember_facts` (plural)** to save multiple distinct points at once to reduce latency. Save preferences, projects, goals, decisions, and context immediately.
-> 3.  **SAVE KNOWLEDGE**: When you learn something useful, interesting facts about user projects, or reusable code patterns, save them to memory.
-> 4.  **SEARCH STRATEGY**:
->     - **Overview First**: Use `read_graph(center="Topic")` to get the "big picture" and identify key entities.
->     - **Drill Down**: Use `recall(query)` to fetch specific details, code snippets, or decisions about those entities.
->     - **Deep Dive**: If the graph reveals an interesting node, run specific `recall` queries on it to uncover deeper context.
-> 5.  **GARDEN THE GRAPH**: If you discover relationships that aren't in the graph (e.g., "Project A uses Library B"), **proactively** use `create_relation` to link them. Don't simply store facts; build the network.
+- **Quick Start**: See [example_instructions.md](file:///c:/Users/Laurin/Documents/GitHub/mcp-local-memory/example_instructions.md)
+- **Comprehensive Rules**: See [detailed_prompt.md](file:///c:/Users/Laurin/Documents/GitHub/mcp-local-memory/detailed_prompt.md)
 
 ---
 
@@ -143,16 +136,39 @@ The server exposes the following MCP tools:
     - **Input**: `{ facts: [{ text: "...", tags?: [...] }] }`
 -   **`recall(query, limit?)`**: Search for relevant past entries via Vector or FTS search.
     - **Automatic Tracking**: Updates `access_count` (+1) and `last_accessed` (timestamp) for all returned memories
+    - **Automatic Tracking**: Updates `access_count` (+1) and `last_accessed` (timestamp) for all returned memories
     - **Feeds Consolidation**: Frequently-recalled memories gain stability and resist decay
+    - **Time Tunnel**: Filters by natural language dates (e.g., "last week", "yesterday", "in 2025").
 -   **`list_recent_memories(limit?)`**: View the latest context.
 -   **`forget(memory_id)`**: Delete a specific entry.
 -   **`export_memories(path)`**: Backup all data to a JSON file.
 
 ### Knowledge Graph
--   **`create_entity(name, type, observations?)`**: Manually define an entity.
+-   **`create_entity(name, type, observations?)`**: Manually define an entity. **Smart Append**: If entity exists, observations are added to it.
+-   **`delete_observation(entity_name, observations)`**: Remove specific invalid facts from an entity.
 -   **`create_relation(source, target, relation)`**: Link two entities with a predicate.
+-   **`delete_relation(source, target, relation)`**: Delete a specific link between entities.
+-   **`delete_entity(name)`**: Delete an entity **and all its relations, observations, and embeddings** (Cascade Delete).
+-   **`update_entity(current_name, new_name?, new_type?)`**: Rename an entity or change its type. Relations update automatically.
 -   **`read_graph(center?, depth?)`**: Explore the network of linked facts.
 -   **`cluster_memories(k?)`**: Group knowledge into k topics to get a bird's-eye view.
+
+### Task Management
+
+#### Global Todos (Legacy System)
+-   **`add_todo(content, due_date?)`**: Create a global task. Pending tasks automatically appear in `memory://current-context`.
+-   **`complete_todo(id)`**: Mark task as done. Archives it as a long-term memory ("Completed task: ...").
+-   **`list_todos(status?, limit?)`**: View pending or completed tasks.
+
+#### Conversation & Task Management
+-   **`init_conversation(name?)`**: Initialize a conversation session. Returns `conversation_id` **+ automatic startup context** including:
+    - User info (top entity), recent 5 memories, important relations
+    - Active tasks (global + conversation-specific, up to 10)
+    - Pending todos (up to 5)
+-   **`add_task(content, section?, conversation_id?)`**: Add a task to a specific conversation or global scope (if `conversation_id` omitted).
+-   **`update_task_status(id, status)`**: Update task status to `pending`, `in-progress`, or `complete`.
+-   **`list_tasks(conversation_id?, status?)`**: List tasks. Use `__all__` to show all tasks or omit to show global tasks only.
+-   **`delete_task(id)`**: **CRITICAL for task gardening** - Remove obsolete or completed tasks to prevent context pollution.
 
 ### Retrospective Extraction
 -   **`consolidate_context(text, strategy?, limit?)`** *(OPT-IN via `ENABLE_CONSOLIDATE_TOOL=true`)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
@@ -211,6 +227,20 @@ Group your knowledge into thematic clusters to see the big picture.
 
 ---
 
+## 📂 Resources
+
+The server exposes structured data via MCP Resources:
+
+| URI Patterns | Description |
+| :--- | :--- |
+| `memory://current-context` | Standard snapshot of recent memories, important entities, relations, and top 3 pending todos. Optimized for turn-start context injection. |
+| `memory://turn-context` | Dynamic refresh of active tasks, important entities, and recent memory activity. Recommended for mid-conversation "awareness checks". |
+| `memory://tasks` | View all global tasks (not tied to a specific conversation). |
+| `memory://tasks-{conversation_id}` | View all tasks for a specific conversation, organized by section. |
+| `memory://todos` | View all pending and recently completed todos. |
+
+---
+
 ## 🏗 System Architecture
 
 The heart of the system is a single `memory.db` SQLite file. 
@@ -236,8 +266,9 @@ Run internal verification tests:
 ### Windows ARM64 (Snapdragon / Surface Pro X)
 *   **Limitation**: The vector search extension (`sqlite-vec`) does not currently provide pre-built binaries for Windows ARM64.
 *   **Result**: Vector-based features (like `recall` with semantic queries) will be unavailable.
-*   **Workaround**: Run this server using **x64 Node.js** (v20 or v22 recommended).
-    *   **Note**: Avoid Node v24+ for now, as it lacks pre-built binaries for `better-sqlite3`, requiring you to have x64 C++ Build Tools installed to compile from source.
+*   **Workaround**: Run this server using **WSL2** (see WSL configuration example above).
+    *   **Alternative**: If you prefer native Windows, use **x64 Node.js** (v20 or v22 recommended).
+    *   **Note**: Avoid Node v24+ for now, as it lacks pre-built binaries for `better-sqlite3`, requiring you to have C++ Build Tools installed to compile from source.
 
 ### Build Tools
 *   **Requirement**: This project uses `better-sqlite3`, which is a native C++ module.
