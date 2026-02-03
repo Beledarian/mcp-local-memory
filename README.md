@@ -120,7 +120,7 @@ To get the most out of this memory server, instruct your agent to check the cont
 > **CRITICAL: Be proactive with memory! Call `remember_fact` FREQUENTLY whenever the user shares important information.**
 > 
 > 1.  **ALWAYS** read the resource `memory://current-context` at the start of every turn to understand the user's recent activities and important entities.
-> 2.  **PROACTIVELY** use `remember_fact` to save any new, important information the user tells you—don't wait to be asked. Save preferences, projects, goals, decisions, and context immediately.
+> 2.  **PROACTIVELY** use `remember_fact` to save new information. **USE `remember_facts` (plural)** to save multiple distinct points at once to reduce latency. Save preferences, projects, goals, decisions, and context immediately.
 > 3.  **SAVE KNOWLEDGE**: When you learn something useful, interesting facts about user projects, or reusable code patterns, save them to memory.
 > 4.  **USE RECALL FIRST**: Before asking the user for context, ALWAYS check `recall(query)` first. if the user mentions a project, acronym, or person you don't recognize, search for it.
 > 5.  **EXPLORE RELATIONSHIPS**: When the user asks about complex topics or relationships (e.g., "tell me about project X"), use `read_graph(center="Project X", depth=2)` to retrieve connected entities and provide a deeper answer.
