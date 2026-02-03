@@ -46,7 +46,7 @@ Control the server behavior via environment variables:
 
 | Variable | Options | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `ARCHIVIST_STRATEGY` | `passive`, `nlp`, `llm` | `nlp` | Control the auto-ingestion behavior. Can be comma-separated. |
+| `ARCHIVIST_STRATEGY` | `passive`, `nlp`, `llm` | `nlp` | Control automatic entity extraction behavior. `passive`=disabled, `nlp`=free offline extraction, `llm`=AI-powered extraction (~200 tokens per `remember_fact` call). Can be comma-separated (e.g., `nlp,llm`). |
 | `MEMORY_DB_PATH` | Path to DB file | `./memory.db` | Location of the SQLite database. |
 | `CONTEXT_WINDOW_LIMIT` | Integer | `500` | Max characters returned by `memory://current-context`. |
 | `CONTEXT_MAX_ENTITIES` | Integer | `5` | Max high-importance entities in context. |
@@ -131,6 +131,7 @@ The server exposes the following MCP tools:
 
 ### Memory Management
 -   **`remember_fact(text, tags?)`**: Saves a new piece of information. **USE FREQUENTLY**—be proactive about saving anything important the user shares (preferences, projects, goals, decisions, context).
+    - **Automatic Entity Extraction**: Extracts entities and relations using configured `ARCHIVIST_STRATEGY` (**NLP=free, LLM=~200 tokens per call**)
 -   **`recall(query, limit?)`**: Search for relevant past entries via Vector or FTS search.
     - **Automatic Tracking**: Updates `access_count` (+1) and `last_accessed` (timestamp) for all returned memories
     - **Feeds Consolidation**: Frequently-recalled memories gain stability and resist decay
@@ -148,7 +149,7 @@ The server exposes the following MCP tools:
 -   **`consolidate_context(text, strategy?, limit?)`** *(OPT-IN via `ENABLE_CONSOLIDATE_TOOL=true`)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
     - **Enable**: Set `ENABLE_CONSOLIDATE_TOOL=true` in your MCP server environment variables
     - **`strategy`**: `'nlp'` (fast, offline, default) or `'llm'` (thorough, requires Ollama)
-    - **Token Cost**: ~80 tokens (summary) + ~200 tokens (LLM) = **~280 tokens total** (vs 3,000+ for full transcript)
+    - **Token Cost**: ~80 tokens (summary input) + **~200 tokens (if strategy='llm')** = **~280 tokens total (LLM)** or **~80 tokens (NLP only)**
     - **Example**: `consolidate_context(text="Discussed Python for data science, TypeScript frustrations, CEOSim project", strategy="llm")`
 
 > [!NOTE]
