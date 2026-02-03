@@ -120,8 +120,8 @@ You can combine multiple strategies by separating them with a comma (e.g. `nlp,l
 
 For effective agent interaction with this memory server, we recommend using a detailed system prompt.
 
-- **Quick Start**: See [example_instructions.md](file:///c:/Users/Laurin/Documents/GitHub/mcp-local-memory/example_instructions.md)
-- **Comprehensive Rules**: See [detailed_prompt.md](file:///c:/Users/Laurin/Documents/GitHub/mcp-local-memory/detailed_prompt.md)
+- **Quick Start**: See [example_instructions.md](example_instructions.md)
+- **Comprehensive Rules**: See [detailed_prompt.md](detailed_prompt.md)
 
 ---
 
