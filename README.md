@@ -113,7 +113,9 @@ You can combine multiple strategies by separating them with a comma (e.g. `nlp,l
 
 To get the most out of this memory server, instruct your agent to check the context resource at the start of every interaction.
 
-**Add this to your System Prompt / Custom Instructions:**
+example_prompt.md
+
+**Add this to your System Prompt / Custom Instructions [(Full Detailed Example Propmt in File)](example_prompt.md):**
 
 > You have access to a long-term memory via the `local-memory` tool server.
 > 
