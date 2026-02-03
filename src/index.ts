@@ -202,19 +202,23 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
-  return {
-    tools: [
-      REMEMBER_FACT_TOOL,
-      RECALL_TOOL,
-      FORGET_TOOL,
-      LIST_RECENT_MEMORIES_TOOL,
-      EXPORT_MEMORIES_TOOL,
-      CREATE_ENTITY_TOOL,
-      CREATE_RELATION_TOOL,
-      READ_GRAPH_TOOL,
-      // CONSOLIDATE_CONTEXT_TOOL, // Disabled by default - manually enable in config if needed
-    ],
-  };
+  const tools = [
+    REMEMBER_FACT_TOOL,
+    RECALL_TOOL,
+    FORGET_TOOL,
+    LIST_RECENT_MEMORIES_TOOL,
+    EXPORT_MEMORIES_TOOL,
+    CREATE_ENTITY_TOOL,
+    CREATE_RELATION_TOOL,
+    READ_GRAPH_TOOL,
+  ];
+
+  // consolidate_context is opt-in via environment variable
+  if (process.env.ENABLE_CONSOLIDATE_TOOL === 'true') {
+    tools.push(CONSOLIDATE_CONTEXT_TOOL);
+  }
+
+  return { tools };
 });
 
 // Handle tool execution

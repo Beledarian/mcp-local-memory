@@ -53,6 +53,7 @@ Control the server behavior via environment variables:
 | `CONTEXT_MAX_MEMORIES` | Integer | `5` | Max recent memories in context. |
 | `OLLAMA_URL` | URL string | `http://localhost:11434` | Endpoint for the LLM strategy. |
 | `USE_WORKER` | `true`, `false` | `true` | Run Archivist in a background thread to prevent blocking. |
+| `ENABLE_CONSOLIDATE_TOOL` | `true`, `false` | `false` | Enable the `consolidate_context` tool for retrospective memory extraction. |
 | `TAG_MATCH_BOOST` | Float | `0.15` | Score boost for exact tag matches in `recall` results. Higher = stronger tag priority. |
 | `MEMORY_HALF_LIFE_WEEKS` | Float | `4.0` | Weeks until memory importance decays to 50%. Longer = slower decay. |
 | `MEMORY_CONSOLIDATION_FACTOR` | Float | `1.0` | Strength of access-based consolidation. Higher = frequently-used memories resist decay more. |
@@ -144,8 +145,8 @@ The server exposes the following MCP tools:
 -   **`cluster_memories(k?)`**: Group knowledge into k topics to get a bird's-eye view.
 
 ### Retrospective Extraction
--   **`consolidate_context(text, strategy?, limit?)`** *(DISABLED BY DEFAULT)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
-    - **Note**: This tool is disabled by default. Enable it by uncommenting in `src/index.ts` if needed.
+-   **`consolidate_context(text, strategy?, limit?)`** *(OPT-IN via `ENABLE_CONSOLIDATE_TOOL=true`)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
+    - **Enable**: Set `ENABLE_CONSOLIDATE_TOOL=true` in your MCP server environment variables
     - **`strategy`**: `'nlp'` (fast, offline, default) or `'llm'` (thorough, requires Ollama)
     - **Token Cost**: ~80 tokens (summary) + ~200 tokens (LLM) = **~280 tokens total** (vs 3,000+ for full transcript)
     - **Example**: `consolidate_context(text="Discussed Python for data science, TypeScript frustrations, CEOSim project", strategy="llm")`
