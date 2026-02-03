@@ -56,7 +56,7 @@ Control the server behavior via environment variables:
 
 ## Quick Start Configuration (Standard)
 
-Add this to your `mcp_config.json` (or `claude_desktop_config.json`):
+Add this to your `mcp_config.json`:
 
 ```json
 {
