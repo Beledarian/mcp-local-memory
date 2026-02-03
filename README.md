@@ -121,8 +121,9 @@ To get the most out of this memory server, instruct your agent to check the cont
 > 
 > 1.  **ALWAYS** read the resource `memory://current-context` at the start of every turn to understand the user's recent activities and important entities.
 > 2.  **PROACTIVELY** use `remember_fact` to save any new, important information the user tells you—don't wait to be asked. Save preferences, projects, goals, decisions, and context immediately.
-> 3.  Use `recall` to search for specific past details if the context resource doesn't provide enough info.
-> 4.  Use `read_graph(depth=2)` to understand the relationships between entities if complex reasoning is required.
+> 3.  **SAVE KNOWLEDGE**: When you learn something useful, interesting facts about user projects, or reusable code patterns, save them to memory.
+> 4.  Use `recall` to search for specific past details if the context resource doesn't provide enough info.
+> 5.  Use `read_graph(depth=2)` to understand the relationships between entities if complex reasoning is required.
 
 ---
 

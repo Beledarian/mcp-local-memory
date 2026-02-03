@@ -81,7 +81,8 @@ export function initSchema(db: Database) {
       INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES('delete', old.rowid, old.content, old.tags);
     END;
 
-    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE ON memories BEGIN
+    DROP TRIGGER IF EXISTS memories_au;
+    CREATE TRIGGER IF NOT EXISTS memories_au AFTER UPDATE OF content, tags ON memories BEGIN
       INSERT INTO memories_fts(memories_fts, rowid, content, tags) VALUES('delete', old.rowid, old.content, old.tags);
       INSERT INTO memories_fts(rowid, content, tags) VALUES (new.rowid, new.content, new.tags);
     END;

@@ -317,99 +317,134 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const limit = (args?.limit as number) || 5;
         const returnJson = (args?.json as boolean) || false;
 
-        // 1. Get query embedding
-        const embedding = await embedder.embed(query);
-        const float32Embedding = new Float32Array(embedding);
-
-        // 2. Search
-        let results: any[] = [];
-        let usedSearchMethod = "vector";
+        let debugSteps = [];
 
         try {
-            // Attempt vector search
-            results = db
-              .prepare(
-                `
-                SELECT 
-                  m.id, 
-                  m.content,
-                  m.tags,
-                  m.created_at,
-                  m.importance,
-                  m.last_accessed,
-                  m.access_count,
-                  vec_distance_cosine(v.embedding, ?) as distance,
-                  ranked_score(m.importance, m.last_accessed, m.access_count, vec_distance_cosine(v.embedding, ?)) as score
-                FROM vec_items v
-                JOIN memories m ON v.rowid = m.rowid
-                ORDER BY score DESC
-                LIMIT ?
-                `
-              )
-              .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit * 2) as any[];
-        } catch (err) {
-            usedSearchMethod = "fts-fallback";
-        }
+            // 1. Get query embedding
+            debugSteps.push("Embedding query...");
+            const embedding = await embedder.embed(query);
+            const float32Embedding = new Float32Array(embedding);
 
-        // 3. Fallback/Hybrid using FTS
-        if (results.length === 0 || usedSearchMethod === "fts-fallback") {
-            const tokenizeFTSQuery = (q: string): string => {
-                const tokens = q.replace(/[^\w\s]/g, ' ').split(/\s+/).filter(t => t.length > 0).map(t => `"${t}"`);
-                return tokens.length > 0 ? tokens.join(' OR ') : q;
-            };
-            
-            const ftsResults = db.prepare(`
-                SELECT 
-                    id, 
-                    memories.content,
-                    memories.tags,
-                    memories.importance,
-                    created_at,
-                    rank as score
-                FROM memories_fts 
-                JOIN memories ON memories_fts.rowid = memories.rowid
-                WHERE memories_fts MATCH ? 
-                ORDER BY rank
-                LIMIT ?
-            `).all(tokenizeFTSQuery(query), limit) as any[];
-            
-            results = ftsResults;
-            usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
-        }
+            // 2. Search
+            let results: any[] = [];
+            let usedSearchMethod = "vector";
 
-        // Post-process boosting
-        const tagBoost = parseFloat(process.env.TAG_MATCH_BOOST || '0.15');
-        const queryLower = query.toLowerCase();
-        results = results.map(r => {
             try {
-                const tags = JSON.parse(r.tags || '[]') as string[];
-                const hasExactMatch = tags.some(tag => queryLower.includes(tag.toLowerCase()));
-                return { ...r, score: r.score + (hasExactMatch ? tagBoost : 0) };
-            } catch { return r; }
-        }).sort((a, b) => b.score - a.score).slice(0, limit);
+                debugSteps.push("Attempting vector search...");
+                // Attempt vector search
+                results = db
+                .prepare(
+                    `
+                    SELECT 
+                    m.id, 
+                    m.content,
+                    m.tags,
+                    m.created_at,
+                    m.importance,
+                    m.last_accessed,
+                    m.access_count,
+                    vec_distance_cosine(v.embedding, ?) as distance,
+                    ranked_score(m.importance, m.last_accessed, m.access_count, vec_distance_cosine(v.embedding, ?)) as score
+                    FROM vec_items v
+                    JOIN memories m ON v.rowid = m.rowid
+                    ORDER BY score DESC
+                    LIMIT ?
+                    `
+                )
+                .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit * 2) as any[];
+                debugSteps.push(`Vector search success. Got ${results.length} results.`);
+            } catch (err: any) {
+                const msg = `Vector search failed: ${err.message}`;
+                console.warn(msg);
+                debugSteps.push(msg);
+                usedSearchMethod = "fts-fallback";
+            }
 
-        // Update Access Stats
-        if (results.length > 0) {
-            const ids = results.map(r => r.id);
-            const ph = ids.map(() => '?').join(',');
-            db.prepare(`UPDATE memories SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1 WHERE id IN (${ph})`).run(...ids);
+            // 3. Fallback/Hybrid using FTS
+            if (results.length === 0 || usedSearchMethod === "fts-fallback") {
+                debugSteps.push("Entering FTS fallback...");
+                try {
+                    const tokenizeFTSQuery = (q: string): string => {
+                        const tokens = q.replace(/[^\w\s]/g, ' ').split(/\s+/).filter(t => t.length > 0).map(t => `"${t}"`);
+                        return tokens.length > 0 ? tokens.join(' OR ') : q;
+                    };
+                    
+                    const ftsResults = db.prepare(`
+                        SELECT 
+                            id, 
+                            memories.content,
+                            memories.tags,
+                            memories.importance,
+                            created_at,
+                            rank as score
+                        FROM memories_fts 
+                        JOIN memories ON memories_fts.rowid = memories.rowid
+                        WHERE memories_fts MATCH ? 
+                        ORDER BY rank
+                        LIMIT ?
+                    `).all(tokenizeFTSQuery(query), limit) as any[];
+                    
+                    results = ftsResults;
+                    usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
+                    debugSteps.push(`FTS search success. Got ${results.length} results.`);
+                } catch (ftsErr: any) {
+                    const msg = `FTS search failed: ${ftsErr.message}`;
+                    console.error(msg);
+                    debugSteps.push(msg);
+                    // If both fail, throwing here will be caught by outer catch
+                    throw new Error(`Both Vector and FTS search failed. Debug: ${debugSteps.join(' -> ')}`);
+                }
+            }
+
+            // Post-process boosting
+            debugSteps.push("Post-processing...");
+            const tagBoost = parseFloat(process.env.TAG_MATCH_BOOST || '0.15');
+            const queryLower = query.toLowerCase();
+            results = results.map(r => {
+                try {
+                    const tags = JSON.parse(r.tags || '[]') as string[];
+                    const hasExactMatch = tags.some(tag => queryLower.includes(tag.toLowerCase()));
+                    return { ...r, score: (r.score || 0) + (hasExactMatch ? tagBoost : 0) };
+                } catch { return r; }
+            }).sort((a, b) => b.score - a.score).slice(0, limit);
+
+            // Update Access Stats
+            if (results.length > 0) {
+                try {
+                    debugSteps.push("Updating access stats...");
+                    const ids = results.map(r => r.id);
+                    const ph = ids.map(() => '?').join(',');
+                    db.prepare(`UPDATE memories SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1 WHERE id IN (${ph})`).run(...ids);
+                    debugSteps.push("Access stats updated.");
+                } catch (updateErr: any) {
+                    console.warn("Failed to update access stats (non-critical):", updateErr.message);
+                    debugSteps.push(`Access stats update failed: ${updateErr.message}`);
+                }
+            }
+
+            if (returnJson) {
+            return { content: [{ type: "text", text: JSON.stringify({ method: usedSearchMethod, results, debug: debugSteps }, null, 2) }] };
+            }
+
+            const head = `Recall results for "${query}" (${usedSearchMethod}):\n`;
+            const body = results.map(r => {
+            const importanceChar = (r.importance || 0) >= 0.8 ? " ⭐" : "";
+            const tags = JSON.parse(r.tags || '[]');
+            const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
+            return `[Score: ${(r.score || 0).toFixed(2)}${importanceChar}] ${r.content}${tagStr}`;
+            }).join('\n');
+
+            return {
+            content: [{ type: "text", text: head + (body || "No relevant memories found.") }],
+            };
+
+        } catch (outerErr: any) {
+             // Catch all logic errors and return debug info
+             return {
+                isError: true,
+                content: [{ type: "text", text: `Critical Recall Error: ${outerErr.message}\nTrace: ${debugSteps.join(' -> ')}` }]
+             };
         }
-
-        if (returnJson) {
-          return { content: [{ type: "text", text: JSON.stringify({ method: usedSearchMethod, results }, null, 2) }] };
-        }
-
-        const head = `Recall results for "${query}" (${usedSearchMethod}):\n`;
-        const body = results.map(r => {
-          const importanceChar = r.importance >= 0.8 ? " ⭐" : "";
-          const tags = JSON.parse(r.tags || '[]');
-          const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
-          return `[Score: ${r.score.toFixed(2)}${importanceChar}] ${r.content}${tagStr}`;
-        }).join('\n');
-
-        return {
-          content: [{ type: "text", text: head + (body || "No relevant memories found.") }],
-        };
       }
 
       case "forget": {
