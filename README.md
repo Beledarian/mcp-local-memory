@@ -122,8 +122,11 @@ To get the most out of this memory server, instruct your agent to check the cont
 > 1.  **ALWAYS** read the resource `memory://current-context` at the start of every turn to understand the user's recent activities and important entities.
 > 2.  **PROACTIVELY** use `remember_fact` to save new information. **USE `remember_facts` (plural)** to save multiple distinct points at once to reduce latency. Save preferences, projects, goals, decisions, and context immediately.
 > 3.  **SAVE KNOWLEDGE**: When you learn something useful, interesting facts about user projects, or reusable code patterns, save them to memory.
-> 4.  **USE RECALL FIRST**: Before asking the user for context, ALWAYS check `recall(query)` first. if the user mentions a project, acronym, or person you don't recognize, search for it.
-> 5.  **EXPLORE RELATIONSHIPS**: When the user asks about complex topics or relationships (e.g., "tell me about project X"), use `read_graph(center="Project X", depth=2)` to retrieve connected entities and provide a deeper answer.
+> 4.  **SEARCH STRATEGY**:
+>     - **Overview First**: Use `read_graph(center="Topic")` to get the "big picture" and identify key entities.
+>     - **Drill Down**: Use `recall(query)` to fetch specific details, code snippets, or decisions about those entities.
+>     - **Deep Dive**: If the graph reveals an interesting node, run specific `recall` queries on it to uncover deeper context.
+> 5.  **GARDEN THE GRAPH**: If you discover relationships that aren't in the graph (e.g., "Project A uses Library B"), **proactively** use `create_relation` to link them. Don't simply store facts; build the network.
 
 ---
 

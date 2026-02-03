@@ -60,9 +60,21 @@ export const RECALL_TOOL: any = {
         type: "number",
         description: "Maximum number of results to return (default is 5)."
       },
+      startDate: {
+        type: "string",
+        description: "Filter by start date (ISO 8601). If not provided, will be inferred from the query if possible."
+      },
+      endDate: {
+        type: "string",
+        description: "Filter by end date (ISO 8601). If not provided, will be inferred from the query if possible."
+      },
       json: {
         type: "boolean",
         description: "If true, returns full JSON structure. If false (default), returns a concise human-readable summary."
+      },
+      debug: {
+        type: "boolean",
+        description: "If true, includes debug information (steps taken, scores) in the response. Default: false."
       }
     },
     required: ["query"]
@@ -146,6 +158,23 @@ export const CREATE_RELATION_TOOL: any = {
   }
 };
 
+export const DELETE_OBSERVATION_TOOL: any = {
+    name: "delete_observation",
+    description: "Delete specific observations from an entity. Use this to remove incorrect or outdated facts.",
+    inputSchema: {
+        type: "object",
+        properties: {
+            entity_name: { type: "string", description: "The name of the entity." },
+            observations: { 
+                type: "array", 
+                items: { type: "string" }, 
+                description: "Array of exact observation strings to delete." 
+            }
+        },
+        required: ["entity_name", "observations"]
+    }
+};
+
 export const READ_GRAPH_TOOL: any = {
   name: "read_graph",
   description: "Explore the knowledge graph. Use this to see how entities are connected or to get a summary of everything known about a specific entity.",
@@ -168,9 +197,46 @@ export const CLUSTER_MEMORIES_TOOL: any = {
   inputSchema: {
     type: "object",
     properties: {
-      k: { type: "number", description: "Number of topics to generate (default 5)." }
+      k: { type: "number", description: "Number of topics generate (default 5)." }
     }
   }
+};
+
+export const ADD_TODO_TOOL: any = {
+    name: "add_todo",
+    description: "Create a new todo item.",
+    inputSchema: {
+        type: "object",
+        properties: {
+            content: { type: "string", description: "The task description." },
+            due_date: { type: "string", description: "Optional due date (ISO 8601 or natural language)." }
+        },
+        required: ["content"]
+    }
+};
+
+export const COMPLETE_TODO_TOOL: any = {
+    name: "complete_todo",
+    description: "Mark a todo as completed. This moves it from the active list to long-term memory.",
+    inputSchema: {
+        type: "object",
+        properties: {
+            id: { type: "string", description: "The ID of the todo to complete." }
+        },
+        required: ["id"]
+    }
+};
+
+export const LIST_TODOS_TOOL: any = {
+    name: "list_todos",
+    description: "List current todo items.",
+    inputSchema: {
+        type: "object",
+        properties: {
+            status: { type: "string", enum: ["pending", "completed"], description: "Filter by status (default: pending)." },
+            limit: { type: "number", description: "Limit number of results (default 20)." }
+        }
+    }
 };
 
 export const CONSOLIDATE_CONTEXT_TOOL: any = {
@@ -196,4 +262,96 @@ export const CONSOLIDATE_CONTEXT_TOOL: any = {
     required: ["text"]
   }
 };
+
+export const INIT_CONVERSATION_TOOL: any = {
+  name: "init_conversation",
+  description: "Initialize a new conversation session with a unique ID. This allows for conversation-scoped task lists. Call this at the start of a conversation to generate a conversation ID.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Optional name/description for this conversation (e.g., 'Implementing NLP Features')."
+      }
+    }
+  }
+};
+
+export const ADD_TASK_TOOL: any = {
+  name: "add_task",
+  description: "Add a task to the task list. Tasks can be scoped to a specific conversation or be global (null conversation_id). **Remember to remove outdated or completed tasks to prevent pollution.**",
+  inputSchema: {
+    type: "object",
+    properties: {
+      content: {
+        type: "string",
+        description: "The task description."
+      },
+      section: {
+        type: "string",
+        description: "Optional section/category (e.g., 'Setup', 'Implementation', 'Testing')."
+      },
+      conversation_id: {
+        type: "string",
+        description: "Optional conversation ID to scope this task. If null, task is global."
+      }
+    },
+    required: ["content"]
+  }
+};
+
+export const UPDATE_TASK_STATUS_TOOL: any = {
+  name: "update_task_status",
+  description: "Update the status of a task. Use this to mark tasks as in-progress or complete. **Remove completed tasks when they're no longer relevant to keep the task list clean.**",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "The task ID to update."
+      },
+      status: {
+        type: "string",
+        enum: ["pending", "in-progress", "complete"],
+        description: "New status for the task."
+      }
+    },
+    required: ["id", "status"]
+  }
+};
+
+export const LIST_TASKS_TOOL: any = {
+  name: "list_tasks",
+  description: "List tasks, optionally filtered by conversation ID or status. Use this to view your current task checklist.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      conversation_id: {
+        type: "string",
+        description: "Optional conversation ID to filter tasks. If null, shows global tasks. If '__all__', shows all tasks."
+      },
+      status: {
+        type: "string",
+        enum: ["pending", "in-progress", "complete"],
+        description: "Optional status filter."
+      }
+    }
+  }
+};
+
+export const DELETE_TASK_TOOL: any = {
+  name: "delete_task",
+  description: "Delete a task from the task list. Use this to remove outdated or completed tasks to prevent clutter.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      id: {
+        type: "string",
+        description: "The task ID to delete."
+      }
+    },
+    required: ["id"]
+  }
+};
+
 

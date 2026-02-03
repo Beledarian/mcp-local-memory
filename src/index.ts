@@ -11,6 +11,7 @@ import fs from "fs-extra";
 import { getDb } from "./db/client.js";
 import { initSchema } from "./db/schema.js";
 import { getEmbedder } from "./lib/embeddings.js";
+import * as chrono from 'chrono-node';
 import {
   CREATE_ENTITY_TOOL,
   CREATE_RELATION_TOOL,
@@ -22,9 +23,19 @@ import {
   REMEMBER_FACT_TOOL,
   REMEMBER_FACTS_TOOL,
   CLUSTER_MEMORIES_TOOL,
-  CONSOLIDATE_CONTEXT_TOOL
+  CONSOLIDATE_CONTEXT_TOOL,
+  DELETE_OBSERVATION_TOOL,
+  ADD_TODO_TOOL,
+  COMPLETE_TODO_TOOL,
+  LIST_TODOS_TOOL,
+  INIT_CONVERSATION_TOOL,
+  ADD_TASK_TOOL,
+  UPDATE_TASK_STATUS_TOOL,
+  LIST_TASKS_TOOL,
+  DELETE_TASK_TOOL
 } from "./tools/definitions.js";
 import { getArchivist } from "./lib/archivist.js";
+import * as taskHandlers from './tools/task_handlers.js';
 
 // Initialize DB
 const db = getDb();
@@ -116,6 +127,12 @@ server.setRequestHandler(ListResourcesRequestSchema, async () => {
                 name: "Current Context",
                 description: "A summary of relevant entities and recent memories for the current session.",
                 mimeType: "text/plain",
+            },
+            {
+                uri: "memory://turn-context",
+                name: "Turn Context",
+                description: "Dynamic mid-conversation refresh of active tasks, entities, and recent activity.",
+                mimeType: "text/plain",
             }
         ]
     };
@@ -134,6 +151,10 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         
         // --- SMART CONTEXT LOGIC ---
         
+        // 0. Todo Context (Pending & Overdue)
+        const todoLimit = parseInt(process.env.CONTEXT_TODO_LIMIT || '3');
+        const todos = db.prepare(`SELECT * FROM todos WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?`).all(todoLimit) as any[];
+
         // 1. Recent Memories
         const recentMemories = db.prepare(`SELECT content, created_at FROM memories ORDER BY created_at DESC LIMIT ?`).all(memoriesLimit) as any[];
         
@@ -144,11 +165,11 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         // For now: Global Importance is the most reliable signal we have.
         // IMPROVEMENT: "Entities recently modified or created"
         // Let's add: Top N Important Entities
-        let importantEntities = [];
+        let importantEntities: any[] = [];
         try {
-             importantEntities = db.prepare(`SELECT name, type, observations FROM entities ORDER BY importance DESC LIMIT ?`).all(entitiesLimit) as any[];
+             importantEntities = db.prepare(`SELECT id, name, type, observations FROM entities ORDER BY importance DESC LIMIT ?`).all(entitiesLimit) as any[];
         } catch (e) {
-             importantEntities = db.prepare(`SELECT name, type, observations FROM entities LIMIT ?`).all(entitiesLimit) as any[];
+             importantEntities = db.prepare(`SELECT id, name, type, observations FROM entities LIMIT ?`).all(entitiesLimit) as any[];
         }
 
         // 3. Recently Active Entities (Created/Updated recently)
@@ -158,7 +179,8 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         const recentContent = recentMemories.map(m => m.content).join(' ');
         // Find entities whose names appear in recent content
         // This is a "Poor man's active context" but effective locally.
-        const allEntities = db.prepare('SELECT name, type, observations FROM entities').all() as any[];
+        // This is a "Poor man's active context" but effective locally.
+        const allEntities = db.prepare('SELECT id, name, type, observations FROM entities').all() as any[];
         const activeEntities = allEntities.filter(e => recentContent.includes(e.name)).slice(0, entitiesLimit);
         
         // Deduplicate Important vs Active
@@ -170,13 +192,62 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         });
         
         let context = "=== CURRENT CONTEXT ===\n\n";
+
+        if (todos.length > 0) {
+            context += "Active Todos:\n";
+            todos.forEach(t => {
+                const due = t.due_date ? ` (Due: ${t.due_date})` : '';
+                context += `[ ] ${t.content}${due} (ID: ${t.id})\n`;
+            });
+            context += "\n";
+        }
         
         if (combinedEntities.length > 0) {
             context += "Relevant Entities:\n";
+            
+             // Fetch observations from new table for these entities
+            const entityIds = combinedEntities.map(e => e.id); // Assuming entities have 'id' select in previous query? 
+            // The query was `SELECT name, type, observations FROM entities` -> NO ID.
+            // We need to fetch ID to join.
+            // Let's rely on name for now or fetch ID.
+            // Actually, let's just fetch IDs in step 2.
+            // Since we can't easily change the previous query without context, let's just do a name look up or subquery?
+            // Better: update step 2 query to include ID.
+            
             combinedEntities.forEach(e => {
-                const obs = JSON.parse(e.observations || '[]');
-                const obsStr = obs.length > 0 ? ` (${obs.join(', ')})` : '';
-                context += `- ${e.name} [${e.type}]${obsStr}\n`;
+                context += `- ${e.name} [${e.type}]\n`;
+                
+                // Fetch top 3 observations for this entity
+                const observations = db.prepare(`
+                    SELECT content FROM entity_observations 
+                    WHERE entity_id = ? 
+                    ORDER BY created_at DESC 
+                    LIMIT 3
+                `).all(e.id) as any[];
+                
+                if (observations.length > 0) {
+                    observations.forEach((obs: any) => {
+                        const truncated = obs.content.length > 60 ? obs.content.substring(0, 60) + '...' : obs.content;
+                        context += `    • ${truncated}\n`;
+                    });
+                }
+            });
+            context += "\n";
+        }
+        
+        // === PROMINENT RELATIONS ===
+        const topRelations = db.prepare(`
+            SELECT source, relation, target, COUNT(*) as freq
+            FROM relations
+            GROUP BY source, relation, target
+            ORDER BY freq DESC
+            LIMIT 10
+        `).all() as any[];
+        
+        if (topRelations.length > 0) {
+            context += "Prominent Relations:\n";
+            topRelations.forEach((r: any) => {
+                context += `- ${r.source} --[${r.relation}]--> ${r.target}\n`;
             });
             context += "\n";
         }
@@ -200,7 +271,194 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
         };
     }
     
-    throw new Error(`Resource not found: ${uri}`);
+    if (uri === "memory://turn-context") {
+        // Dynamic refresh context
+        const recentMemories = db.prepare(`
+            SELECT content, created_at FROM memories 
+            ORDER BY created_at DESC LIMIT 10
+        `).all() as any[];
+        
+        const activeEntities = db.prepare(`
+            SELECT name, type FROM entities 
+            ORDER BY importance DESC LIMIT 5
+        `).all() as any[];
+        
+        const topRelations = db.prepare(`
+            SELECT source, relation, target 
+            FROM relations 
+            GROUP BY source, relation, target
+            ORDER BY COUNT(*) DESC LIMIT 10
+        `).all() as any[];
+        
+        // Get recent tasks (both global and conversation-specific)
+        const recentTasks = db.prepare(`
+            SELECT * FROM tasks 
+            WHERE status != 'complete'
+            ORDER BY created_at DESC LIMIT 5
+        `).all() as any[];
+        
+        let context = "=== TURN CONTEXT (Dynamic Refresh) ===\n\n";
+        
+        if (recentTasks.length > 0) {
+            context += "Active Tasks:\n";
+            recentTasks.forEach((t: any) => {
+                const status = t.status === 'in-progress' ? '[/]' : '[ ]';
+                context += `c:\Users\Laurin\Documents\GitHub\mcp-local-memory{status} c:\Users\Laurin\Documents\GitHub\mcp-local-memory{t.content}\n`;
+            });
+            context += "\n";
+        }
+        
+        context += "Active Entities:\n";
+        activeEntities.forEach((e: any) => {
+            context += `- c:\Users\Laurin\Documents\GitHub\mcp-local-memory{e.name} [c:\Users\Laurin\Documents\GitHub\mcp-local-memory{e.type}]\n`;
+        });
+        context += "\n";
+        
+        if (topRelations.length > 0) {
+            context += "Key Relations:\n";
+            topRelations.forEach((r: any) => {
+                context += `- c:\Users\Laurin\Documents\GitHub\mcp-local-memory{r.source} --[c:\Users\Laurin\Documents\GitHub\mcp-local-memory{r.relation}]--> c:\Users\Laurin\Documents\GitHub\mcp-local-memory{r.target}\n`;
+            });
+            context += "\n";
+        }
+        
+        context += "Recent Activity:\n";
+        recentMemories.forEach((m: any) => {
+            const truncated = m.content.length > 80 ? m.content.substring(0, 80) + '...' : m.content;
+            context += `- c:\Users\Laurin\Documents\GitHub\mcp-local-memory{truncated}\n`;
+        });
+        
+        return {
+            contents: [{
+                uri,
+                mimeType: "text/plain",
+                text: context
+            }]
+        };
+    }
+    
+    if (uri === "memory://tasks" || uri.startsWith("memory://tasks-")) {
+        // Extract conversation_id if present in URI like memory://tasks-{conversation_id}
+        const conversationId = uri.startsWith("memory://tasks-") 
+            ? uri.substring("memory://tasks-".length) 
+            : null;
+        
+        // Always show global tasks
+        const globalTasks = db.prepare(`
+            SELECT id, content, status, section FROM tasks
+            WHERE conversation_id IS NULL
+            ORDER BY created_at DESC
+        `).all() as any[];
+        
+        let output = "=== TASKS ===\\n\\n";
+        
+        // Global tasks
+        if (globalTasks.length > 0) {
+            output += "Global Tasks:\\n";
+            globalTasks.forEach((t: any) => {
+                const checkbox = t.status === 'complete' ? '[x]' : t.status === 'in-progress' ? '[/]' : '[ ]';
+                const section = t.section ? ` (${t.section})` : '';
+                output += `${checkbox} ${t.content}${section} (ID: ${t.id})\\n`;
+            });
+            output += "\\n";
+        }
+        
+        // If conversation_id specified, show that conversation's tasks
+        if (conversationId) {
+            const conversation = db.prepare(`
+                SELECT id, name FROM conversations WHERE id = ?
+            `).get(conversationId) as any;
+            
+            if (conversation) {
+                const tasks = db.prepare(`
+                    SELECT id, content, status, section FROM tasks
+                    WHERE conversation_id = ?
+                    ORDER BY section, created_at DESC
+                `).all(conversationId) as any[];
+                
+                if (tasks.length > 0) {
+                    output += `Conversation: "${conversation.name || 'Unnamed'}" (ID: ${conversation.id})\\n`;
+                    
+                    // Group by section
+                    const sections = new Map<string, any[]>();
+                    tasks.forEach(task => {
+                        const section = task.section || 'Uncategorized';
+                        if (!sections.has(section)) {
+                            sections.set(section, []);
+                        }
+                        sections.get(section)!.push(task);
+                    });
+                    
+                    sections.forEach((taskList, section) => {
+                        output += `  ${section}:\\n`;
+                        taskList.forEach(t => {
+                            const checkbox = t.status === 'complete' ? '[x]' : t.status === 'in-progress' ? '[/]' : '[ ]';
+                            output += `    ${checkbox} ${t.content} (ID: ${t.id})\\n`;
+                        });
+                    });
+                    output += "\\n";
+                }
+            }
+        }
+        
+        if (globalTasks.length === 0 && !conversationId) {
+            output += "No global tasks found.\\n";
+        }
+        
+        return {
+            contents: [{
+                uri,
+                mimeType: "text/plain",
+                text: output
+            }]
+        };
+    }
+    
+    if (uri === "memory://todos") {
+        // Show todos separated by status
+        const pendingTodos = db.prepare(`
+            SELECT id, content, due_date FROM todos
+            WHERE status = 'pending'
+            ORDER BY due_date, created_at DESC
+        `).all() as any[];
+        
+        const completedTodos = db.prepare(`
+            SELECT id, content, completed_at FROM todos
+            WHERE status = 'complete'
+            ORDER BY completed_at DESC LIMIT 10
+        `).all() as any[];
+        
+        let output = "=== TODOS ===\\n\\n";
+        
+        output += `Pending (${pendingTodos.length}):\\n`;
+        if (pendingTodos.length > 0) {
+            pendingTodos.forEach((t: any) => {
+                const dueStr = t.due_date ? ` (Due: ${t.due_date})` : '';
+                output += `[ ] ${t.content}${dueStr} (ID: ${t.id})\\n`;
+            });
+        } else {
+            output += "No pending todos.\\n";
+        }
+        output += "\\n";
+        
+        output += `Completed (${completedTodos.length}):\\n`;
+        if (completedTodos.length > 0) {
+            completedTodos.forEach((t: any) => {
+                output += `[x] ${t.content} (ID: ${t.id})\\n`;
+            });
+        } else {
+            output += "No completed todos.\\n";
+        }
+        
+        return {
+            contents: [{
+                uri,
+                mimeType: "text/plain",
+                text: output
+            }]
+        };
+    }
+        throw new Error(`Resource not found: ${uri}`);
 });
 
 // List available tools
@@ -215,6 +473,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     CREATE_RELATION_TOOL,
     READ_GRAPH_TOOL,
     REMEMBER_FACTS_TOOL,
+    CLUSTER_MEMORIES_TOOL,
+    DELETE_OBSERVATION_TOOL,
+    ADD_TODO_TOOL,
+    COMPLETE_TODO_TOOL,
+    LIST_TODOS_TOOL,
+    INIT_CONVERSATION_TOOL,
+    ADD_TASK_TOOL,
+    UPDATE_TASK_STATUS_TOOL,
+    LIST_TASKS_TOOL,
+    DELETE_TASK_TOOL,
   ];
 
   // consolidate_context is opt-in via environment variable
@@ -316,13 +584,58 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const query = args?.query as string;
         const limit = (args?.limit as number) || 5;
         const returnJson = (args?.json as boolean) || false;
+        const showDebug = (args?.debug as boolean) || false;
+        
+        let startDate: Date | null = args?.startDate ? new Date(args.startDate as string) : null;
+        let endDate: Date | null = args?.endDate ? new Date(args.endDate as string) : null;
 
         let debugSteps = [];
+        let semanticQuery = query;
+
+        // 0. Time Tunnel Parsing (Chrono)
+        try {
+            if (!startDate && !endDate) {
+                const parsed = chrono.parse(query, new Date(), { forwardDate: false });
+                if (parsed.length > 0) {
+                    const result = parsed[0];
+                    if (result.start) {
+                        startDate = result.start.date();
+                        debugSteps.push(`Time Tunnel: Parsed start date: ${startDate.toISOString()}`);
+                    }
+                    if (result.end) {
+                        endDate = result.end.date();
+                        debugSteps.push(`Time Tunnel: Parsed end date: ${endDate.toISOString()}`);
+                    } else if (startDate) {
+                        // If "last week", usually implies a range up to now or end of that period
+                        // chrono usually handles "last week" as a specific point or range. 
+                        // If no end is explicit, we might want to default to NOW for "since" logic
+                        // But let's verify what chrono gives. 
+                        // For "last week", chrono gives a specific date. 
+                        // If the user says "since last week", start is set.
+                        // Let's default endDate to NOW if we have a start date but no end date, assuming a "filter from X" intent?
+                        // Actually, strict filtering is safer. Let's start with just what chrono finds.
+                    }
+                    
+                    // Remove the time phrase from the query to improve embedding quality
+                    // e.g. "What did I do yesterday" -> "What did I do"
+                    if (startDate || endDate) {
+                         // escape special regex chars? chrono result.text is usually safe text
+                         semanticQuery = query.replace(result.text, "").trim();
+                         // Cleanup extra spaces or punctuation left behind
+                         semanticQuery = semanticQuery.replace(/\s+/, " ").trim();
+                         debugSteps.push(`Time Tunnel: Cleaned query: "${semanticQuery}"`);
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn("Chrono parsing failed", err);
+        }
 
         try {
             // 1. Get query embedding
-            debugSteps.push("Embedding query...");
-            const embedding = await embedder.embed(query);
+            // 1. Get query embedding
+            debugSteps.push(`Embedding query: "${semanticQuery}"...`);
+            const embedding = await embedder.embed(semanticQuery);
             const float32Embedding = new Float32Array(embedding);
 
             // 2. Search
@@ -332,6 +645,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             try {
                 debugSteps.push("Attempting vector search...");
                 // Attempt vector search
+                // Dynamic WHERE clause
+                let whereClause = "WHERE 1=1";
+                const params: any[] = [Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer)];
+
+                if (startDate) {
+                    whereClause += " AND m.created_at >= ?";
+                    params.push(startDate.toISOString());
+                }
+                if (endDate) {
+                    whereClause += " AND m.created_at <= ?";
+                    params.push(endDate.toISOString());
+                }
+
+                params.push(limit * 2);
+
                 results = db
                 .prepare(
                     `
@@ -347,11 +675,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     ranked_score(m.importance, m.last_accessed, m.access_count, vec_distance_cosine(v.embedding, ?)) as score
                     FROM vec_items v
                     JOIN memories m ON v.rowid = m.rowid
+                    ${whereClause}
                     ORDER BY score DESC
                     LIMIT ?
                     `
                 )
-                .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit * 2) as any[];
+                .all(...params) as any[];
                 debugSteps.push(`Vector search success. Got ${results.length} results.`);
             } catch (err: any) {
                 const msg = `Vector search failed: ${err.message}`;
@@ -369,6 +698,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                         return tokens.length > 0 ? tokens.join(' OR ') : q;
                     };
                     
+                    let ftsWhere = "WHERE memories_fts MATCH ?";
+                    const ftsParams: any[] = [tokenizeFTSQuery(query)];
+
+                    if (startDate) {
+                        ftsWhere += " AND memories.created_at >= ?";
+                        ftsParams.push(startDate.toISOString());
+                    }
+                    if (endDate) {
+                        ftsWhere += " AND memories.created_at <= ?";
+                        ftsParams.push(endDate.toISOString());
+                    }
+                    ftsParams.push(limit);
+                    
                     const ftsResults = db.prepare(`
                         SELECT 
                             id, 
@@ -379,10 +721,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                             rank as score
                         FROM memories_fts 
                         JOIN memories ON memories_fts.rowid = memories.rowid
-                        WHERE memories_fts MATCH ? 
+                        ${ftsWhere} 
                         ORDER BY rank
                         LIMIT ?
-                    `).all(tokenizeFTSQuery(query), limit) as any[];
+                    `).all(...ftsParams) as any[];
                     
                     results = ftsResults;
                     usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
@@ -431,8 +773,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const importanceChar = (r.importance || 0) >= 0.8 ? " ⭐" : "";
             const tags = JSON.parse(r.tags || '[]');
             const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
-            return `[Score: ${(r.score || 0).toFixed(2)}${importanceChar}] ${r.content}${tagStr}`;
+            
+            // Calculate Time Ago
+            const created = new Date(r.created_at);
+            const now = new Date();
+            const diffTime = Math.abs(now.getTime() - created.getTime());
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+            const timeAgo = diffDays === 1 ? "1 day ago" : `${diffDays} days ago`;
+
+            return `[Score: ${(r.score || 0).toFixed(2)}${importanceChar} | ${timeAgo}] ${r.content}${tagStr}`;
             }).join('\n');
+
+            if (showDebug && !returnJson) {
+                const debugHeader = `\n\n--- Debug Info ---\n${debugSteps.join('\n')}`;
+                return {
+                    content: [{ type: "text", text: head + (body || "No relevant memories found.") + debugHeader }],
+                };
+            }
 
             return {
             content: [{ type: "text", text: head + (body || "No relevant memories found.") }],
@@ -517,33 +874,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const observations = (args?.observations as string[]) || [];
 
         // Check for existing entity via fuzzy match (Levenshtein <= 2)
-        const existing = db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(name) as any;
+        let existing = db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(name) as any;
         
-        if (existing) {
-             return {
-                content: [{ type: "text", text: `Entity '${name}' already exists (as '${existing.name}'). ID: ${existing.id}` }]
-            };
-        }
+        let entityId = existing?.id;
+        let message = "";
 
-        const id = uuidv4();
-        
-        try {
-            db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, type, JSON.stringify(observations));
-            
-            // Feature 6.1: Generate Entity Embedding
-            embedder.embed(name + " " + type).then(vec => {
+        if (existing) {
+             message = `Entity '${name}' already exists (as '${existing.name}').`;
+             if (observations.length > 0) {
+                 const insertObs = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
+                 const transaction = db.transaction((obsList) => {
+                     for (const obs of obsList) insertObs.run(existing.id, obs);
+                 });
+                 transaction(observations);
+                 message += ` Appended ${observations.length} new observations.`;
+             }
+        } else {
+             entityId = uuidv4();
+             db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(entityId, name, type, "[]");
+             
+             if (observations.length > 0) {
+                 const insertObs = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
+                 const transaction = db.transaction((obsList) => {
+                     for (const obs of obsList) insertObs.run(entityId, obs);
+                 });
+                 transaction(observations);
+             }
+             
+             // Generate Entity Embedding
+             embedder.embed(name + " " + type).then(vec => {
                 const float32 = new Float32Array(vec);
                 try {
-                    db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(id, Buffer.from(float32.buffer));
+                    db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(entityId, Buffer.from(float32.buffer));
                 } catch (e) { console.warn("Entity embedding insert failed:", e); }
-            }).catch(e => console.error("Embedding generation failed:", e));
+             }).catch(e => console.error("Embedding generation failed:", e));
 
-            return {
-                content: [{ type: "text", text: `Created entity '${name}' of type '${type}'` }]
-            };
-        } catch (error: any) {
-            throw error;
+             message = `Created entity '${name}' of type '${type}'.`;
         }
+
+        return {
+            content: [{ type: "text", text: message }]
+        };
       }
 
       case "create_relation": {
@@ -643,6 +1014,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                  edges = db.prepare(`SELECT * FROM relations WHERE source IN (${ph}) AND target IN (${ph}) LIMIT 100`).all(...names, ...names) as any[];
              }
         }
+        
+        // Enrich nodes with observations from new table
+        const nodeIds = nodes.map(n => n.id);
+        if (nodeIds.length > 0) {
+            const ph = nodeIds.map(() => '?').join(',');
+            const allObs = db.prepare(`SELECT entity_id, content FROM entity_observations WHERE entity_id IN (${ph})`).all(...nodeIds) as any[];
+            
+            // Attach to nodes
+            nodes.forEach(n => {
+                const myObs = allObs.filter(o => o.entity_id === n.id).map(o => o.content);
+                // Merge with legacy observations if present
+                let legacyObs = [];
+                try { legacyObs = JSON.parse(n.observations || '[]'); } catch (e) {}
+                n.observations = [...new Set([...legacyObs, ...myObs])];
+            });
+        }
 
         if (returnJson) {
             return { content: [{ type: "text", text: JSON.stringify({ nodes, edges, relatedMemories }, null, 2) }] };
@@ -727,6 +1114,118 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
         }
       }
+
+      case "delete_observation": {
+          const entityName = args?.entity_name as string;
+          const content = (args?.observations as string[]) || []; 
+          
+          const entity = db.prepare("SELECT id FROM entities WHERE name = ?").get(entityName) as any;
+          if (!entity) {
+               return { content: [{ type: "text", text: `Entity '${entityName}' not found.` }], isError: true };
+          }
+          
+          let deletedCount = 0;
+          const delStmt = db.prepare("DELETE FROM entity_observations WHERE entity_id = ? AND content = ?");
+          
+          const transaction = db.transaction((items) => {
+              for (const obs of items) {
+                  const res = delStmt.run(entity.id, obs);
+                  deletedCount += res.changes;
+              }
+          });
+          transaction(content);
+
+          return {
+              content: [{ type: "text", text: `Deleted ${deletedCount} observations from '${entityName}'.` }]
+          };
+      }
+
+      case "add_todo": {
+          const content = args?.content as string;
+          const dueDate = args?.due_date as string | undefined;
+          const id = uuidv4();
+          
+          db.prepare("INSERT INTO todos (id, content, due_date) VALUES (?, ?, ?)").run(id, content, dueDate || null);
+          
+          return {
+              content: [{ type: "text", text: `Todo added (ID: ${id})` }]
+          };
+      }
+
+      case "complete_todo": {
+          const id = args?.id as string;
+          const todo = db.prepare("SELECT * FROM todos WHERE id = ?").get(id) as any;
+          
+          if (!todo) {
+              return { content: [{ type: "text", text: `Todo '${id}' not found.` }], isError: true };
+          }
+          
+          // 1. Mark as completed
+          db.prepare("UPDATE todos SET status = 'completed' WHERE id = ?").run(id);
+          
+          // 2. Convert to memory
+          const memId = uuidv4();
+          const memContent = `Completed task: ${todo.content}`;
+          db.prepare("INSERT INTO memories (id, content, tags) VALUES (?, ?, ?)").run(memId, memContent, JSON.stringify(["task", "completion"]));
+          
+          return {
+              content: [{ type: "text", text: `Todo completed and saved to memory.` }]
+          };
+      }
+
+      case "list_todos": {
+          const status = (args?.status as string) || 'pending';
+          const limit = (args?.limit as number) || 20;
+          
+          const todos = db.prepare("SELECT * FROM todos WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(status, limit) as any[];
+          
+          const list = todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content} (ID: ${t.id})`).join('\n');
+          
+          return {
+              content: [{ type: "text", text: list || "No todos found." }]
+          };
+      }
+
+
+      case "init_conversation":
+          return {
+              content: [{
+                  type: "text",
+                  text: JSON.stringify(taskHandlers.handleInitConversation(db, args as any), null, 2)
+              }]
+          };
+
+      case "add_task":
+          return {
+              content: [{
+                  type: "text",
+                  text: JSON.stringify(taskHandlers.handleAddTask(db, args as any), null, 2)
+              }]
+          };
+
+      case "update_task_status":
+          return {
+              content: [{
+                  type: "text",
+                  text: JSON.stringify(taskHandlers.handleUpdateTaskStatus(db, args as any), null, 2)
+              }]
+          };
+
+      case "list_tasks":
+          return {
+              content: [{
+                  type: "text",
+                  text: taskHandlers.handleListTasks(db, args as any).tasks
+              }]
+          };
+
+      case "delete_task":
+          return {
+              content: [{
+                  type: "text",
+                  text: JSON.stringify(taskHandlers.handleDeleteTask(db, args as any), null, 2)
+              }]
+          };
 
       default:
         throw new Error(`Unknown tool: ${name}`);

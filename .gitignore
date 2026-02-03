@@ -8,3 +8,14 @@ test.json
 test_tags.db
 test_wsl.sh
 sqlite-vec/
+
+# Clutter & Diagnostics
+reproduce_*.ts
+diagnose_*.ts
+list_memories_*.ts
+check_schema.ts
+fix_triggers.ts
+export_*.json
+*.log
+.DS_Store
+.env
