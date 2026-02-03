@@ -6,7 +6,7 @@ import { z } from "zod";
 
 export const REMEMBER_FACT_TOOL: any = {
   name: "remember_fact",
-  description: "Save an important fact or piece of information to long-term memory. Use this when the user tells you something worth remembering for future sessions.",
+  description: "Save an important fact or piece of information to long-term memory. **USE THIS TOOL FREQUENTLY AND PROACTIVELY** whenever the user shares anything worth remembering for future sessions—preferences, projects, goals, decisions, context, etc. Don't wait to be asked; if it seems important, save it immediately.",
   inputSchema: {
     type: "object",
     properties: {

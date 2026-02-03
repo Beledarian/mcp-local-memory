@@ -114,8 +114,11 @@ To get the most out of this memory server, instruct your agent to check the cont
 **Add this to your System Prompt / Custom Instructions:**
 
 > You have access to a long-term memory via the `local-memory` tool server.
+> 
+> **CRITICAL: Be proactive with memory! Call `remember_fact` FREQUENTLY whenever the user shares important information.**
+> 
 > 1.  **ALWAYS** read the resource `memory://current-context` at the start of every turn to understand the user's recent activities and important entities.
-> 2.  Use `remember_fact` to save any new, important information the user tells you.
+> 2.  **PROACTIVELY** use `remember_fact` to save any new, important information the user tells you—don't wait to be asked. Save preferences, projects, goals, decisions, and context immediately.
 > 3.  Use `recall` to search for specific past details if the context resource doesn't provide enough info.
 > 4.  Use `read_graph(depth=2)` to understand the relationships between entities if complex reasoning is required.
 
@@ -126,7 +129,7 @@ To get the most out of this memory server, instruct your agent to check the cont
 The server exposes the following MCP tools:
 
 ### Memory Management
--   **`remember_fact(text, tags?)`**: Saves a new piece of information.
+-   **`remember_fact(text, tags?)`**: Saves a new piece of information. **USE FREQUENTLY**—be proactive about saving anything important the user shares (preferences, projects, goals, decisions, context).
 -   **`recall(query, limit?)`**: Search for relevant past entries via Vector or FTS search.
     - **Automatic Tracking**: Updates `access_count` (+1) and `last_accessed` (timestamp) for all returned memories
     - **Feeds Consolidation**: Frequently-recalled memories gain stability and resist decay
@@ -141,7 +144,8 @@ The server exposes the following MCP tools:
 -   **`cluster_memories(k?)`**: Group knowledge into k topics to get a bird's-eye view.
 
 ### Retrospective Extraction
--   **`consolidate_context(text, strategy?, limit?)`** *(OPTIONAL)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
+-   **`consolidate_context(text, strategy?, limit?)`** *(DISABLED BY DEFAULT)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
+    - **Note**: This tool is disabled by default. Enable it by uncommenting in `src/index.ts` if needed.
     - **`strategy`**: `'nlp'` (fast, offline, default) or `'llm'` (thorough, requires Ollama)
     - **Token Cost**: ~80 tokens (summary) + ~200 tokens (LLM) = **~280 tokens total** (vs 3,000+ for full transcript)
     - **Example**: `consolidate_context(text="Discussed Python for data science, TypeScript frustrations, CEOSim project", strategy="llm")`

@@ -212,7 +212,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       CREATE_ENTITY_TOOL,
       CREATE_RELATION_TOOL,
       READ_GRAPH_TOOL,
-      CONSOLIDATE_CONTEXT_TOOL,
+      // CONSOLIDATE_CONTEXT_TOOL, // Disabled by default - manually enable in config if needed
     ],
   };
 });
