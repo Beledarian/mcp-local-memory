@@ -133,6 +133,8 @@ The server exposes the following MCP tools:
 ### Memory Management
 -   **`remember_fact(text, tags?)`**: Saves a new piece of information. **USE FREQUENTLY**—be proactive about saving anything important the user shares (preferences, projects, goals, decisions, context).
     - **Automatic Entity Extraction**: Extracts entities and relations using configured `ARCHIVIST_STRATEGY` (**NLP=free, LLM=~200 tokens per call**)
+-   **`remember_facts(facts)`**: Save multiple distinct facts at once. Use this to batch saves and reduce latency.
+    - **Input**: `{ facts: [{ text: "...", tags?: [...] }] }`
 -   **`recall(query, limit?)`**: Search for relevant past entries via Vector or FTS search.
     - **Automatic Tracking**: Updates `access_count` (+1) and `last_accessed` (timestamp) for all returned memories
     - **Feeds Consolidation**: Frequently-recalled memories gain stability and resist decay
