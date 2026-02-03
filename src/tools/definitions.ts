@@ -37,6 +37,10 @@ export const RECALL_TOOL: any = {
       limit: {
         type: "number",
         description: "Maximum number of results to return (default is 5)."
+      },
+      json: {
+        type: "boolean",
+        description: "If true, returns full JSON structure. If false (default), returns a concise human-readable summary."
       }
     },
     required: ["query"]
@@ -67,6 +71,10 @@ export const LIST_RECENT_MEMORIES_TOOL: any = {
       limit: {
         type: "number",
         description: "Number of recent memories to fetch (default is 10)."
+      },
+      json: {
+        type: "boolean",
+        description: "If true, returns full JSON structure. If false (default), returns a concise human-readable summary."
       }
     }
   }
@@ -123,7 +131,11 @@ export const READ_GRAPH_TOOL: any = {
     type: "object",
     properties: {
       center: { type: "string", description: "Optionally focus on a specific entity. If omitted, returns a general overview of the graph." },
-      depth: { type: "number", description: "How many levels of connections to traverse (default 1)." }
+      depth: { type: "number", description: "How many levels of connections to traverse (default 1)." },
+      json: {
+        type: "boolean",
+        description: "If true, returns full JSON structure. If false (default), returns a concise human-readable summary."
+      }
     }
   }
 };

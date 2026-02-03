@@ -27,6 +27,8 @@ import { getArchivist } from "./lib/archivist.js";
 
 // Initialize DB
 const db = getDb();
+try { fs.writeFileSync('/tmp/mcp_db_path.txt', process.env.MEMORY_DB_PATH || 'DEFAULT'); } catch(e) {}
+console.error(`[Server] Database initialized at: ${process.env.MEMORY_DB_PATH || 'default (memory.db)'}`);
 
 // Register Custom Functions
 // Leventshtein distance for fuzzy matching
@@ -270,18 +272,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case "recall": {
         const query = args?.query as string;
         const limit = (args?.limit as number) || 5;
+        const returnJson = (args?.json as boolean) || false;
 
         // 1. Get query embedding
         const embedding = await embedder.embed(query);
         const float32Embedding = new Float32Array(embedding);
 
-        // 2. Search (fetch 2x for post-filtering)
+        // 2. Search
         let results: any[] = [];
         let usedSearchMethod = "vector";
 
         try {
             // Attempt vector search
-            // Join back with memories table to get content + tags
             results = db
               .prepare(
                 `
@@ -302,59 +304,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 `
               )
               .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit * 2) as any[];
-              
-             // Option 3: Boost exact tag matches
-             const tagBoost = parseFloat(process.env.TAG_MATCH_BOOST || '0.15');
-             const queryLower = query.toLowerCase();
-             results = results.map(r => {
-                 try {
-                     const tags = JSON.parse(r.tags || '[]') as string[];
-                     const hasExactMatch = tags.some(tag => queryLower.includes(tag.toLowerCase()));
-                     return {
-                         ...r,
-                         score: r.score + (hasExactMatch ? tagBoost : 0)
-                     };
-                 } catch {
-                     return r;
-                 }
-             }).sort((a, b) => b.score - a.score).slice(0, limit);
-              
-             // Update Access Stats (Consolidation)
-             if (results.length > 0) {
-                 const ids = results.map(r => r.id);
-                 const ph = ids.map(() => '?').join(',');
-                 db.prepare(`UPDATE memories SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1 WHERE id IN (${ph})`).run(...ids);
-             }
         } catch (err) {
-            // Vector search failed (likely missing extension), fall back to FTS
-             usedSearchMethod = "fts-fallback";
+            usedSearchMethod = "fts-fallback";
         }
 
-        // 3. Fallback: If vector search failed or returned 0 results, try FTS
-        if (results.length === 0) {
-            usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
-            
-            // Tokenize query for FTS5
-            // Multi-word queries like "performance optimizations preference" should become
-            // "performance OR optimizations OR preference" for better recall
+        // 3. Fallback/Hybrid using FTS
+        if (results.length === 0 || usedSearchMethod === "fts-fallback") {
             const tokenizeFTSQuery = (q: string): string => {
-                // Remove special FTS5 characters and split into tokens
-                const tokens = q
-                    .replace(/[^\w\s]/g, ' ') // Remove special chars
-                    .split(/\s+/) // Split on whitespace
-                    .filter(t => t.length > 0) // Remove empty tokens
-                    .map(t => `"${t}"`); // Quote each token to handle as literal
-                
-                // Join with OR for broader matching
+                const tokens = q.replace(/[^\w\s]/g, ' ').split(/\s+/).filter(t => t.length > 0).map(t => `"${t}"`);
                 return tokens.length > 0 ? tokens.join(' OR ') : q;
             };
-            
-            const ftsQuery = tokenizeFTSQuery(query);
             
             const ftsResults = db.prepare(`
                 SELECT 
                     id, 
-                    memories.content, 
+                    memories.content,
+                    memories.tags,
+                    memories.importance,
                     created_at,
                     rank as score
                 FROM memories_fts 
@@ -362,21 +328,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 WHERE memories_fts MATCH ? 
                 ORDER BY rank
                 LIMIT ?
-            `).all(ftsQuery, limit) as any[];
+            `).all(tokenizeFTSQuery(query), limit) as any[];
             
             results = ftsResults;
+            usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
         }
 
+        // Post-process boosting
+        const tagBoost = parseFloat(process.env.TAG_MATCH_BOOST || '0.15');
+        const queryLower = query.toLowerCase();
+        results = results.map(r => {
+            try {
+                const tags = JSON.parse(r.tags || '[]') as string[];
+                const hasExactMatch = tags.some(tag => queryLower.includes(tag.toLowerCase()));
+                return { ...r, score: r.score + (hasExactMatch ? tagBoost : 0) };
+            } catch { return r; }
+        }).sort((a, b) => b.score - a.score).slice(0, limit);
+
+        // Update Access Stats
+        if (results.length > 0) {
+            const ids = results.map(r => r.id);
+            const ph = ids.map(() => '?').join(',');
+            db.prepare(`UPDATE memories SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1 WHERE id IN (${ph})`).run(...ids);
+        }
+
+        if (returnJson) {
+          return { content: [{ type: "text", text: JSON.stringify({ method: usedSearchMethod, results }, null, 2) }] };
+        }
+
+        const head = `Recall results for "${query}" (${usedSearchMethod}):\n`;
+        const body = results.map(r => {
+          const importanceChar = r.importance >= 0.8 ? " ⭐" : "";
+          const tags = JSON.parse(r.tags || '[]');
+          const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
+          return `[Score: ${r.score.toFixed(2)}${importanceChar}] ${r.content}${tagStr}`;
+        }).join('\n');
+
         return {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify({
-                  method: usedSearchMethod,
-                  results: results
-              }, null, 2),
-            },
-          ],
+          content: [{ type: "text", text: head + (body || "No relevant memories found.") }],
         };
       }
 
@@ -412,10 +401,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "list_recent_memories": {
         const limit = (args?.limit as number) || 10;
-        const results = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT ?').all(limit);
+        const returnJson = (args?.json as boolean) || false;
+        const results = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT ?').all(limit) as any[];
         
+        if (returnJson) {
+            return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+        }
+
+        const head = `Most recent ${results.length} memories:\n`;
+        const body = results.map(r => {
+            const importanceChar = r.importance >= 0.8 ? " ⭐" : "";
+            const tags = JSON.parse(r.tags || '[]');
+            const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
+            return `- [${new Date(r.created_at).toLocaleDateString()}${importanceChar}] ${r.content}${tagStr}`;
+        }).join('\n');
+
         return {
-            content: [{ type: "text", text: JSON.stringify(results, null, 2) }]
+            content: [{ type: "text", text: head + (body || "No memories found.") }]
         };
       }
 
@@ -501,13 +503,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "read_graph": {
         const center = args?.center as string | undefined;
-        const depth = Math.min((args?.depth as number) || 1, 3); // Max depth 3 to prevent explosion
+        const depth = Math.min((args?.depth as number) || 1, 3);
+        const returnJson = (args?.json as boolean) || false;
         
         let nodes: any[] = [];
         let edges: any[] = [];
+        let relatedMemories: any[] = [];
 
         if (center) {
-            // Check if center exists (fuzzy?)
             let centerEntity = db.prepare('SELECT * FROM entities WHERE name = ?').get(center) as any;
             if (!centerEntity) {
                  centerEntity = db.prepare('SELECT * FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1').get(center) as any;
@@ -517,10 +520,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   return { content: [{ type: "text", text: `Entity '${center}' not found.` }] };
             }
             
-            // RECURSIVE CTE for Graph Traversal
-            // We want to find all relations starting from center, up to depth N
-            // RECURSIVE CTE for Graph Traversal
-            // We want to find all relations starting from center, up to depth N
             const query = `
                 WITH RECURSIVE bfs(name, depth) AS (
                     SELECT name, 0 FROM entities WHERE name = ?
@@ -538,26 +537,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 JOIN bfs b2 ON r.target = b2.name
                 WHERE b1.depth <= ? AND b2.depth <= ?;
             `;
-            // Note: The previous query logic was a bit circular. 
-            // The BFS finds nodes. Then we fetch edges connecting any two found nodes.
-            // This is safer than trying to track edges in the recursion directly which complicates undirected logic.
             
             edges = db.prepare(query).all(centerEntity.name, depth, depth, depth) as any[];
+            const nodeNames = new Set<string>([centerEntity.name]);
+            edges.forEach(e => { nodeNames.add(e.source); nodeNames.add(e.target); });
             
-            // Collect all unique node names from edges + center
-            const nodeNames = new Set<string>();
-            nodeNames.add(centerEntity.name);
-            edges.forEach(e => {
-                nodeNames.add(e.source);
-                nodeNames.add(e.target);
-            });
-            
-            // Fetch node details
             const placeholders = Array.from(nodeNames).map(() => '?').join(',');
-            nodes = db.prepare(`SELECT * FROM entities WHERE name IN (${placeholders})`).all(...Array.from(nodeNames)) as any[];
+            nodes = db.prepare(`SELECT * FROM entities WHERE name IN (${placeholders}) ORDER BY importance DESC`).all(...Array.from(nodeNames)) as any[];
+
+            // Fetch top 5 important memories related to center (simple FTS fallback)
+            relatedMemories = db.prepare(`
+                SELECT content, importance, tags 
+                FROM memories 
+                WHERE id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?) 
+                ORDER BY importance DESC LIMIT 5
+            `).all(`"${centerEntity.name}"`) as any[];
+
+            if (relatedMemories.length === 0) {
+                 relatedMemories = db.prepare(`SELECT content, importance, tags FROM memories WHERE content LIKE ? ORDER BY importance DESC LIMIT 5`).all(`%${centerEntity.name}%`) as any[];
+            }
             
         } else {
-             // Return simplified overview
              nodes = db.prepare(`SELECT * FROM entities ORDER BY importance DESC LIMIT 50`).all() as any[];
              const names = nodes.map(n => n.name);
              if (names.length > 0) {
@@ -566,9 +566,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
              }
         }
 
-        return {
-            content: [{ type: "text", text: JSON.stringify({ nodes, edges }, null, 2) }]
-        };
+        if (returnJson) {
+            return { content: [{ type: "text", text: JSON.stringify({ nodes, edges, relatedMemories }, null, 2) }] };
+        }
+
+        let output = center ? `Knowledge Graph for "${center}":\n` : `Knowledge Graph Overview:\n`;
+        
+        if (edges.length > 0) {
+            output += "\n--- Relations ---\n";
+            output += edges.map(e => `- ${e.source} --(${e.relation})--> ${e.target}`).join('\n');
+        } else {
+            output += "\nNo relations found in this range.";
+        }
+
+        if (nodes.length > 1) {
+            output += "\n\n--- Key Entities ---\n";
+            output += nodes.map(n => `- ${n.name} (${n.type})${n.importance >= 0.8 ? " ⭐" : ""}`).join('\n');
+        }
+
+        if (relatedMemories.length > 0) {
+            output += "\n\n--- Top Related Memories ---\n";
+            output += relatedMemories.map(m => {
+                 const tags = JSON.parse(m.tags || '[]');
+                 return `- ${m.content}${tags.length > 0 ? ` [${tags.join(', ')}]` : ''}`;
+            }).join('\n');
+        }
+
+        return { content: [{ type: "text", text: output }] };
       }
 
       case "cluster_memories": {
