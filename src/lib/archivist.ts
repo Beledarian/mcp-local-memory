@@ -90,16 +90,27 @@ export class NlpArchivist implements Archivist {
     const places = doc.places().out('array');
     const orgs = doc.organizations().out('array');
     
-    // Catch-all for capitalized nouns that might be entities
-    const nouns = doc.match('#ProperNoun').out('array');
+    // Fallback: Catch-all for capitalized nouns that might be entities
+    // We filter out common sentence-starting non-entities
+    const stopWords = new Set(['The', 'A', 'An', 'He', 'She', 'They', 'It', 'This', 'That', 'These', 'Those', 'In', 'On', 'At', 'To', 'From', 'With']);
+    const nouns = doc.terms().out('array')
+        .filter((n: string) => /^[A-Z]/.test(n))
+        .map((n: string) => n.replace(/[.,!?]$/, "").trim())
+        .filter((n: string) => !stopWords.has(n))
+        .filter((n: string) => n.length > 2);
     
+    // Improved Prefix detection for Places/People
+    const prefixed = doc.match('(in|at|from|the) #TitleCase').out('array')
+        .map((t: string) => t.split(' ').slice(1).join(' ').replace(/[.,!?]$/, "").trim())
+        .filter((t: string) => t.length > 2 && !stopWords.has(t));
+
     // Specific match for Projects (e.g. "Project Alpha", "Operation X")
-    let projects = doc.match('(project|operation|initiative) #ProperNoun').out('array');
+    let projects = doc.match('(project|operation|initiative) #TitleCase').out('array');
     if (projects.length === 0) {
         projects = doc.match('(project|operation|initiative) .').out('array');
     }
 
-    console.error(`[Debug] Found - People: ${people.length}, Places: ${places.length}, Orgs: ${orgs.length}, Projects: ${projects.length}, Nouns: ${nouns.length}`);
+    console.error(`[NlpArchivist] Found - People: ${people.length}, Places: ${places.length}, Orgs: ${orgs.length}, Projects: ${projects.length}, Nouns: ${nouns.length}, Prefixed: ${prefixed.length}`);
 
     const ensureEntity = async (name: string, type: string) => {
         const cleanName = name.replace(/[.,!?]$/, "").trim();
@@ -133,19 +144,20 @@ export class NlpArchivist implements Archivist {
         }
     };
 
-    // Parallelize entity creation (ensureEntity is async now)
+    // Parallelize entity creation
     const entityPromises: Promise<void>[] = [];
     people.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Person')));
     places.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Place')));
     orgs.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Organization')));
     projects.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Project')));
     nouns.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Entity')));
+    prefixed.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Location/Target')));
 
     await Promise.all(entityPromises);
 
-    // Update Memory Tags with found entities
+    // Update Memory Tags and create basic Relations
     if (memoryId) {
-        const allEntities = [...new Set([...people, ...places, ...orgs, ...projects, ...nouns])];
+        const allEntities = [...new Set([...people, ...places, ...orgs, ...projects, ...nouns, ...prefixed])].map(e => e.replace(/[.,!?]$/, "").trim());
         if (allEntities.length > 0) {
             try {
                 const existing = this.db.prepare('SELECT tags FROM memories WHERE id = ?').get(memoryId) as any;
@@ -155,8 +167,59 @@ export class NlpArchivist implements Archivist {
                 const newTags = [...new Set([...tags, ...allEntities])];
                 this.db.prepare('UPDATE memories SET tags = ? WHERE id = ?').run(JSON.stringify(newTags), memoryId);
                 console.error(`[NlpArchivist] Tagged memory ${memoryId} with: ${allEntities.join(', ')}`);
+
+                // Basic Relation Extraction (A [predicate] B)
+                if (allEntities.length >= 2) {
+                    const sentences = doc.sentences().json() as any[];
+                    sentences.forEach(s => {
+                        const sDoc = nlp(s.text);
+                        const sEntities = allEntities.filter(e => s.text.includes(e));
+                        if (sEntities.length >= 2) {
+                            // Extract relations with granular sentiment
+                            let verb = 'related_to';
+                            
+                            const hateMatch = sDoc.match('(hate|hates|loathe|loathes|detest|detests)');
+                            const dislikeMatch = sDoc.match('(dislike|dislikes|not like|not likes)');
+                            const loveMatch = sDoc.match('(love|loves|adore|adores|worship|worships)');
+                            const likeMatch = sDoc.match('(like|likes|prefer|prefers|enjoy|enjoys)');
+                            const containMatch = sDoc.match('(contains|includes|consists of|has|have)');
+                            const madeOfMatch = sDoc.match('(made of|composed of|built with|built from)');
+                            const useMatch = sDoc.match('(uses|utilizes|employs|using)');
+
+                            if (hateMatch.found) {
+                                verb = 'hates';
+                            } else if (dislikeMatch.found) {
+                                verb = 'dislikes';
+                            } else if (loveMatch.found) {
+                                verb = 'loves';
+                            } else if (likeMatch.found) {
+                                verb = 'likes';
+                            } else if (containMatch.found) {
+                                verb = 'contains';
+                            } else if (madeOfMatch.found) {
+                                verb = 'made_of';
+                            } else if (useMatch.found) {
+                                verb = 'uses';
+                            } else {
+                                verb = sDoc.verbs().first().out('normal') || 'related_to';
+                            }
+                            
+                            // Link first entity to others in the same sentence
+                            const source = sEntities[0];
+                            for (let i = 1; i < sEntities.length; i++) {
+                                try {
+                                    this.db.prepare(`
+                                        INSERT OR IGNORE INTO relations (source, target, relation) 
+                                        VALUES (?, ?, ?)
+                                    `).run(source, sEntities[i], verb);
+                                    console.error(`[NlpArchivist] Extracted Relation: ${source} -> ${verb} -> ${sEntities[i]}`);
+                                } catch (e) {}
+                            }
+                        }
+                    });
+                }
             } catch (err: any) { 
-                console.error("Failed to update tags:", err.message); 
+                console.error("Failed to update tags/relations:", err.message); 
             }
         }
     }
