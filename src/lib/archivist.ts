@@ -75,153 +75,205 @@ type EmbedderFn = (text: string) => Promise<number[]>;
 export class NlpArchivist implements Archivist {
   private db: Database;
   private embedder?: EmbedderFn;
+  private insertTransaction: (data: any) => void;
 
   constructor(db: Database, embedder?: EmbedderFn) {
     this.db = db;
     this.embedder = embedder;
+    
+    // Pre-compile the transaction for performance/atomicity
+    this.insertTransaction = this.db.transaction((data: any) => {
+        const { memoryId, entities, relations, tags } = data;
+
+        // 1. Tags Update
+        if (memoryId && tags.length > 0) {
+            try {
+                const existing = this.db.prepare('SELECT tags FROM memories WHERE id = ?').get(memoryId) as any;
+                let currentTags = [];
+                try { currentTags = JSON.parse(existing?.tags || '[]'); } catch (e) {}
+                const newTags = [...new Set([...currentTags, ...tags])];
+                this.db.prepare('UPDATE memories SET tags = ? WHERE id = ?').run(JSON.stringify(newTags), memoryId);
+            } catch (err) {}
+        }
+
+        // 2. Entities & Embeddings
+        for (const e of entities) {
+             const cleanName = e.name.replace(/[.,!?]$/, "").trim();
+             if (cleanName.length < 2) continue;
+             
+             // Check existence logic can be inside or outside, but inside transaction is safer for consistency
+             // We use a simple fuzzy check or exact match. For speed, exact match first.
+             // Note: Levenshtein is expensive, so maybe skip allowed duplicates or rely on exact for now?
+             // Let's stick to the previous logic but optimized:
+             try {
+                // Try Exact Match first (fast)
+                let existing = this.db.prepare('SELECT id FROM entities WHERE name = ?').get(cleanName) as any;
+                
+                // If not found, try fuzzy (slower)
+                if (!existing) {
+                    existing = this.db.prepare('SELECT id FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1').get(cleanName) as any;
+                }
+
+                if (!existing) {
+                    const id = uuidv4();
+                    this.db.prepare('INSERT INTO entities (id, name, type, observations, importance) VALUES (?, ?, ?, ?, ?)').run(id, cleanName, e.type, '[]', 0.5);
+                    // Embeddings must be handled OUTSIDE the blocking transaction if they are async/slow?
+                    // Actually, better-sqlite3 transactions are synchronous. We can't await inside.
+                    // So we must gather IDs here and return them for embedding? 
+                    // OR: We store the embedding *data* passed in.
+                    if (e.embedding) {
+                        this.db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(id, e.embedding);
+                    }
+                }
+             } catch (err: any) {
+                 if (err.code !== 'SQLITE_CONSTRAINT_UNIQUE') console.error("[NlpArchivist] Entity Error:", err.message);
+             }
+        }
+
+        // 3. Relations
+        for (const r of relations) {
+            try {
+                this.db.prepare(`INSERT OR IGNORE INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(r.source, r.target, r.relation);
+            } catch (e) {}
+        }
+    });
   }
 
   async process(text: string, memoryId?: string): Promise<void> {
-    console.error(`[NlpArchivist] Processing: "${text.substring(0, 50)}..."`);
     const doc = nlp(text);
     
-    // Improved extraction using tags and matches
+    // --- Extraction Logic ---
+    
+    // 1. People, Places, Orgs (Standard NER)
     const people = doc.people().out('array');
     const places = doc.places().out('array');
     const orgs = doc.organizations().out('array');
     
-    // Fallback: Catch-all for capitalized nouns that might be entities
-    // We filter out common sentence-starting non-entities
-    const stopWords = new Set(['The', 'A', 'An', 'He', 'She', 'They', 'It', 'This', 'That', 'These', 'Those', 'In', 'On', 'At', 'To', 'From', 'With']);
-    const nouns = doc.terms().out('array')
-        .filter((n: string) => /^[A-Z]/.test(n))
-        .map((n: string) => n.replace(/[.,!?]$/, "").trim())
-        .filter((n: string) => !stopWords.has(n))
-        .filter((n: string) => n.length > 2);
+    // 2. Custom Tech/Project detection
+    // Heuristic: Capitalized words that follow "Project", "Operation", or are known tech terms?
+    // User global rule: "WGSL", "SoA", "L1". These are often Nouns or Acronyms.
+    const acronyms = doc.terms().filter((t: any) => {
+        const text = typeof t.text === 'function' ? t.text() : (t.text || '');
+        return typeof text === 'string' && text.length > 1 && text === text.toUpperCase() && /^[A-Z0-9]+$/.test(text);
+    }).out('array');
     
-    // Improved Prefix detection for Places/People
-    const prefixed = doc.match('(in|at|from|the) #TitleCase').out('array')
-        .map((t: string) => t.split(' ').slice(1).join(' ').replace(/[.,!?]$/, "").trim())
-        .filter((t: string) => t.length > 2 && !stopWords.has(t));
-
-    // Specific match for Projects (e.g. "Project Alpha", "Operation X")
-    let projects = doc.match('(project|operation|initiative) #TitleCase').out('array');
+    // Robust Project Detection
+    let projects: string[] = [];
+    const textStr = typeof doc.text === 'function' ? doc.text() : doc.text || '';
+    if (typeof textStr === 'string') {
+        const matches = textStr.matchAll(/(?:Project|Operation|Initiative)\s+([A-Z][a-z0-9]+)/g);
+        for (const m of matches) {
+            if (m[1]) projects.push("Project " + m[1]);
+        }
+    }
+    
+    // Fallback if Regex failed (sometimes spacing/encoding varies)
     if (projects.length === 0) {
-        projects = doc.match('(project|operation|initiative) .').out('array');
+        const fallback = doc.match('(project|operation|initiative) .').out('array');
+        // Filter to ensure TitleCase
+        fallback.forEach((p: string) => {
+            if (/[A-Z]/.test(p)) projects.push(p); 
+        });
+    }
+    
+    // 3. Normalized Nouns (Soft Entity)
+    // We want to avoid "Perfectly written WGSL" as the entity name. We want "WGSL".
+    // Strategy: Split by space and take the last word if it's a noun? OR rely on strict cleaning.
+    // Let's use a filter for "Concepts".
+    const nouns = doc.nouns().out('array')
+        .map((n: string) => n.replace(/^.*\s+([A-Z][a-z]+)$/, "$1")) // Naive head-finding
+        .filter((n: string) => /^[A-Z]/.test(n)) // Keep only capitalized concepts for now to reduce noise
+        .filter((n: string) => n.length > 2);
+
+    // Create Typed Entities
+    const rawEntities = [
+        ...people.map((n: string) => ({ name: n, type: 'Person' })),
+        ...places.map((n: string) => ({ name: n, type: 'Place' })),
+        ...orgs.map((n: string) => ({ name: n, type: 'Organization' })),
+        ...projects.map((n: string) => ({ name: n, type: 'Project' })),
+        ...acronyms.map((n: string) => ({ name: n, type: 'Concept' })),
+        ...nouns.map((n: string) => ({ name: n, type: 'Entity' }))
+    ];
+    
+    // Clean & Dedupe
+    const stopWords = new Set(['The', 'A', 'An', 'This', 'That', 'These', 'Those', 'In', 'On']);
+    const uniqueMap = new Map();
+    
+    rawEntities.forEach(e => {
+        const clean = e.name.replace(/[.,!?]$/, "").trim();
+        if (!stopWords.has(clean) && clean.length > 1) {
+            // Priority: specific types overwrite generic 'Entity'
+            if (!uniqueMap.has(clean) || (uniqueMap.get(clean).type === 'Entity' && e.type !== 'Entity')) {
+                uniqueMap.set(clean, { name: clean, type: e.type, embedding: null as Buffer | null });
+            }
+        }
+    });
+
+    const entities = Array.from(uniqueMap.values());
+
+    // Pre-calculate Embeddings (Async) before Transaction
+    if (this.embedder) {
+        await Promise.all(entities.map(async (e) => {
+            try {
+                const vec = await this.embedder!(e.name + " " + e.type);
+                e.embedding = Buffer.from(new Float32Array(vec).buffer);
+            } catch (err) {}
+        }));
     }
 
-    console.error(`[NlpArchivist] Found - People: ${people.length}, Places: ${places.length}, Orgs: ${orgs.length}, Projects: ${projects.length}, Nouns: ${nouns.length}, Prefixed: ${prefixed.length}`);
+    // --- Relation Extraction (Simple) ---
+    // Link entities in the same sentence
+    const relations: {source: string, target: string, relation: string}[] = [];
+    const sentences = doc.sentences().json();
+    
+    const entityNames = new Set(entities.map(e => e.name));
 
-    const ensureEntity = async (name: string, type: string) => {
-        const cleanName = name.replace(/[.,!?]$/, "").trim();
-        if (cleanName.length < 2) return;
+    (sentences as any[]).forEach((s: any) => {
+        const sentText = s.text;
+        // Sort entities by appearance in sentence to preserve Source -> Target flow
+        const sentEntities = entities
+            .filter(e => sentText.includes(e.name))
+            .sort((a, b) => sentText.indexOf(a.name) - sentText.indexOf(b.name));
         
-        try {
-            // Check for existing entity via fuzzy match
-            const existing = this.db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(cleanName) as any;
-            if (existing) {
-                console.error(`[NlpArchivist] Resolved '${cleanName}' to existing '${existing.name}'`);
-                return;
-            }
+        if (sentEntities.length >= 2) {
+             const sDoc = nlp(sentText);
+             let verb = '';
+             
+             // Check explicit emotional/structural verbs first
+             if (sDoc.match('(hate|hates|loathe|loathes)').found) verb = 'hates';
+             else if (sDoc.match('(dislike|dislikes|not like)').found) verb = 'dislikes';
+             else if (sDoc.match('(love|loves|adore|adores)').found) verb = 'loves';
+             else if (sDoc.match('(like|likes|prefer|prefers|enjoy)').found) verb = 'likes';
+             else if (sDoc.match('(contains|includes|consists of|has)').found) verb = 'contains';
+             else if (sDoc.match('(uses|utilizes|employs|using)').found) verb = 'uses';
+             
+             // Fallback to first main verb if no specific one found
+             if (!verb) {
+                 verb = sDoc.verbs().first().out('normal') || 'related_to';
+             }
+             
+             // Normalize Verb
+             const cleanVerb = verb; // Already normalized if hit above, or 'normal' from compromise
 
-            const id = uuidv4();
-            this.db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, cleanName, type, '[]');
-            console.error(`[NlpArchivist] Extracted: ${cleanName} (${type})`);
-            
-            // Generate Embedding if available
-            if (this.embedder) {
-                try {
-                    const vector = await this.embedder(cleanName + " " + type);
-                    const float32 = new Float32Array(vector);
-                    this.db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(id, Buffer.from(float32.buffer));
-                } catch (err: any) {
-                    console.warn(`[NlpArchivist] Failed to embed entity '${cleanName}':`, err.message);
-                }
-            }
-
-        } catch (e: any) {
-             if (e.code !== 'SQLITE_CONSTRAINT_UNIQUE') console.error("Insert Entity Error:", e.message);
+             // Source is first entity, others are targets
+             const source = sentEntities[0].name;
+             for (let i = 1; i < sentEntities.length; i++) {
+                 relations.push({ source, target: sentEntities[i].name, relation: cleanVerb });
+             }
         }
-    };
+    });
 
-    // Parallelize entity creation
-    const entityPromises: Promise<void>[] = [];
-    people.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Person')));
-    places.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Place')));
-    orgs.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Organization')));
-    projects.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Project')));
-    nouns.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Entity')));
-    prefixed.forEach((name: string) => entityPromises.push(ensureEntity(name, 'Location/Target')));
-
-    await Promise.all(entityPromises);
-
-    // Update Memory Tags and create basic Relations
-    if (memoryId) {
-        const allEntities = [...new Set([...people, ...places, ...orgs, ...projects, ...nouns, ...prefixed])].map(e => e.replace(/[.,!?]$/, "").trim());
-        if (allEntities.length > 0) {
-            try {
-                const existing = this.db.prepare('SELECT tags FROM memories WHERE id = ?').get(memoryId) as any;
-                let tags = [];
-                try { tags = JSON.parse(existing.tags || '[]'); } catch (e) {}
-                
-                const newTags = [...new Set([...tags, ...allEntities])];
-                this.db.prepare('UPDATE memories SET tags = ? WHERE id = ?').run(JSON.stringify(newTags), memoryId);
-                console.error(`[NlpArchivist] Tagged memory ${memoryId} with: ${allEntities.join(', ')}`);
-
-                // Basic Relation Extraction (A [predicate] B)
-                if (allEntities.length >= 2) {
-                    const sentences = doc.sentences().json() as any[];
-                    sentences.forEach(s => {
-                        const sDoc = nlp(s.text);
-                        const sEntities = allEntities.filter(e => s.text.includes(e));
-                        if (sEntities.length >= 2) {
-                            // Extract relations with granular sentiment
-                            let verb = 'related_to';
-                            
-                            const hateMatch = sDoc.match('(hate|hates|loathe|loathes|detest|detests)');
-                            const dislikeMatch = sDoc.match('(dislike|dislikes|not like|not likes)');
-                            const loveMatch = sDoc.match('(love|loves|adore|adores|worship|worships)');
-                            const likeMatch = sDoc.match('(like|likes|prefer|prefers|enjoy|enjoys)');
-                            const containMatch = sDoc.match('(contains|includes|consists of|has|have)');
-                            const madeOfMatch = sDoc.match('(made of|composed of|built with|built from)');
-                            const useMatch = sDoc.match('(uses|utilizes|employs|using)');
-
-                            if (hateMatch.found) {
-                                verb = 'hates';
-                            } else if (dislikeMatch.found) {
-                                verb = 'dislikes';
-                            } else if (loveMatch.found) {
-                                verb = 'loves';
-                            } else if (likeMatch.found) {
-                                verb = 'likes';
-                            } else if (containMatch.found) {
-                                verb = 'contains';
-                            } else if (madeOfMatch.found) {
-                                verb = 'made_of';
-                            } else if (useMatch.found) {
-                                verb = 'uses';
-                            } else {
-                                verb = sDoc.verbs().first().out('normal') || 'related_to';
-                            }
-                            
-                            // Link first entity to others in the same sentence
-                            const source = sEntities[0];
-                            for (let i = 1; i < sEntities.length; i++) {
-                                try {
-                                    this.db.prepare(`
-                                        INSERT OR IGNORE INTO relations (source, target, relation) 
-                                        VALUES (?, ?, ?)
-                                    `).run(source, sEntities[i], verb);
-                                    console.error(`[NlpArchivist] Extracted Relation: ${source} -> ${verb} -> ${sEntities[i]}`);
-                                } catch (e) {}
-                            }
-                        }
-                    });
-                }
-            } catch (err: any) { 
-                console.error("Failed to update tags/relations:", err.message); 
-            }
-        }
+    // Execute Transaction
+    this.insertTransaction({
+        memoryId,
+        entities,
+        relations,
+        tags: [ ...entityNames ] // Auto-tag memory with found entities
+    });
+    
+    // Log summary
+    if (entities.length > 0) {
+       // console.error(`[NlpArchivist] Extracted ${entities.length} entities & ${relations.length} relations.`);
     }
   }
 }

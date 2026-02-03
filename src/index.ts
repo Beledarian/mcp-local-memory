@@ -20,6 +20,7 @@ import {
   READ_GRAPH_TOOL,
   RECALL_TOOL,
   REMEMBER_FACT_TOOL,
+  REMEMBER_FACTS_TOOL,
   CLUSTER_MEMORIES_TOOL,
   CONSOLIDATE_CONTEXT_TOOL
 } from "./tools/definitions.js";
@@ -213,6 +214,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     CREATE_ENTITY_TOOL,
     CREATE_RELATION_TOOL,
     READ_GRAPH_TOOL,
+    REMEMBER_FACTS_TOOL,
   ];
 
   // consolidate_context is opt-in via environment variable
@@ -256,7 +258,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         insertTx();
 
         // 3. Trigger Archivist (Auto-Ingestion)
-        // Fire and forget - don't block the response
+        // Fire and forget - don't block the response (LATENCY OPTIMIZATION)
         archivist.process(text, id).catch(err => console.error("Archivist error:", err));
 
         return {
@@ -266,6 +268,47 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               text: `Remembered fact with ID: ${id}`,
             },
           ],
+        };
+      }
+
+      case "remember_facts": {
+        const facts = (args?.facts as any[]) || [];
+        const results = [];
+
+        // Transactionally insert all text first (Fast)
+        const insertTx = db.transaction(() => {
+            for (const f of facts) {
+                const id = uuidv4();
+                f.id = id; // Store for post-processing
+                db.prepare(
+                    `INSERT INTO memories (id, content, tags, last_accessed, importance) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0.5)`
+                ).run(id, f.text, JSON.stringify(f.tags || []));
+            }
+        });
+        insertTx();
+
+        // Background Processing (Slow)
+        // We do NOT await this, to return control to the LLM immediately.
+        (async () => {
+             for (const f of facts) {
+                 try {
+                    // 1. Embedding
+                    const embedding = await embedder.embed(f.text);
+                    const float32Embedding = new Float32Array(embedding);
+                    db.prepare(
+                        `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
+                    ).run(f.id, Buffer.from(float32Embedding.buffer));
+                    
+                    // 2. Archivist
+                    await archivist.process(f.text, f.id);
+                 } catch (e) {
+                     console.error(`Error processing background task for fact ${f.id}:`, e);
+                 }
+             }
+        })();
+
+        return {
+            content: [{ type: "text", text: `Queued ${facts.length} facts for memory.` }]
         };
       }
 

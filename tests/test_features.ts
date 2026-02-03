@@ -1,7 +1,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs-extra';
-import { getArchivist } from './src/lib/archivist.js';
+import { getArchivist } from '../src/lib/archivist.js';
 
 // Configuration
 process.env.USE_WORKER = 'false';
@@ -187,7 +187,7 @@ async function runIntegrationTest() {
     db.prepare("INSERT INTO memories (id, content) VALUES (?, ?)").run(m2Id, "Italian Pizza");
     db.prepare("INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id=?), ?)").run(m2Id, Buffer.from(new Float32Array(384).fill(0.9).buffer));
 
-    const { MemoryClusterer } = await import('./src/lib/clustering.js');
+    const { MemoryClusterer } = await import('../src/lib/clustering.js');
     const clusterer = new MemoryClusterer(db);
     const clusters = await clusterer.cluster(2);
     
@@ -205,6 +205,43 @@ async function runIntegrationTest() {
         else console.error("❌ Failed to merge Space Memory + Entity.");
     } else {
         console.error(`❌ Expected 2 clusters, got ${clusters.length}`);
+    }
+    
+    // ---------------------------------------------------------
+    // TEST 4: Entity Normalization & Relation Extraction
+    // ---------------------------------------------------------
+    console.log("\n[Test 4] Normalization & Relations...");
+    const memId4 = uuidv4();
+    const text4 = "User loves perfectly written and efficient WGSL compute shaders.";
+    
+    db.prepare("INSERT INTO memories (id, content) VALUES (?, ?)").run(memId4, text4);
+    
+    // Process
+    await archivist.process(text4, memId4);
+    
+    // Check Entities
+    const userEntity = db.prepare("SELECT * FROM entities WHERE name = 'User'").get();
+    const wgslEntity = db.prepare("SELECT * FROM entities WHERE name = 'WGSL'").get();
+    const efficientWgsl = db.prepare("SELECT * FROM entities WHERE name LIKE '%efficient WGSL%'").get();
+    
+    if (userEntity && wgslEntity && !efficientWgsl) {
+        console.log("✅ Entities Normalized: Found 'User' & 'WGSL', avoided complex noun phrase.");
+    } else {
+        console.error("❌ Entity Normalization Failed:", { 
+            User: !!userEntity, 
+            WGSL: !!wgslEntity, 
+            ComplexDetected: !!efficientWgsl 
+        });
+    }
+    
+    // Check Relation
+    const relation = db.prepare("SELECT * FROM relations WHERE source = 'User' AND target = 'WGSL' AND relation = 'loves'").get();
+    if (relation) {
+        console.log("✅ Relation 'User -> loves -> WGSL' extracted.");
+    } else {
+        // Debug what WAS found
+        const allRels = db.prepare("SELECT * FROM relations").all();
+        console.error("❌ Relation Missing. Found:", allRels);
     }
     
     console.log("\n=== Integration Test Complete ===");

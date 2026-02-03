@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "tsx tests/test_features.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.6.0",
@@ -16,9 +17,11 @@
     "compromise": "^14.14.5",
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
-    "sqlite-vec-linux-arm64": "^0.1.7-alpha.2",
     "uuid": "^9.0.1",
     "zod": "^3.22.4"
+  },
+  "optionalDependencies": {
+    "sqlite-vec-linux-arm64": "^0.1.7-alpha.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.9",

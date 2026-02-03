@@ -12,6 +12,7 @@ A lightweight, privacy-first, "Zero-Docker" memory server for AI agents. This se
 -   **The Archivist**: Configurable "Auto-Ingestion" strategies for automatic graph building.
 -   **Privacy-First**: Zero data leaves your machine. No mandatory cloud APIs.
 -   **Resource Efficient**: ~50MB - 200MB RAM usage. Optimized with `Float32Array` buffers. 
+-   **Improved NLP Extraction**: Optimized extraction of entities and relations using atomic transactions, robust pattern matching (e.g. for Projects), and sentence-aware relation linking. 
 
 ## 🌐 Cross-Agent Shared Context
 
@@ -51,7 +52,7 @@ Control the server behavior via environment variables:
 | `CONTEXT_WINDOW_LIMIT` | Integer | `500` | Max characters returned by `memory://current-context`. |
 | `CONTEXT_MAX_ENTITIES` | Integer | `5` | Max high-importance entities in context. |
 | `CONTEXT_MAX_MEMORIES` | Integer | `5` | Max recent memories in context. |
-| `OLLAMA_URL` | URL string | `http://localhost:11434` | Endpoint for the LLM strategy. |
+| `OLLAMA_URL` | URL string | `http://localhost:11434` | Full API Endpoint for the LLM strategy (e.g. `http://localhost:11434/api/generate`). |
 | `USE_WORKER` | `true`, `false` | `true` | Run Archivist in a background thread to prevent blocking. |
 | `ENABLE_CONSOLIDATE_TOOL` | `true`, `false` | `false` | Enable the `consolidate_context` tool for retrospective memory extraction. |
 | `TAG_MATCH_BOOST` | Float | `0.15` | Score boost for exact tag matches in `recall` results. Higher = stronger tag priority. |
@@ -219,6 +220,22 @@ Run internal verification tests:
 -   `npx tsx test_embedding.ts` (AI Model check)
 -   `npx tsx test_graph.ts` (Graph check)
 -   `npx tsx test_archivist_nlp.ts` (Auto-ingestion check)
+
+---
+
+## 🖥 Compatibility & Troubleshooting
+
+### Windows ARM64 (Snapdragon / Surface Pro X)
+*   **Limitation**: The vector search extension (`sqlite-vec`) does not currently provide pre-built binaries for Windows ARM64.
+*   **Result**: Vector-based features (like `recall` with semantic queries) will be unavailable.
+*   **Workaround**: Run this server using **x64 Node.js** (v20 or v22 recommended).
+    *   **Note**: Avoid Node v24+ for now, as it lacks pre-built binaries for `better-sqlite3`, requiring you to have x64 C++ Build Tools installed to compile from source.
+
+### Build Tools
+*   **Requirement**: This project uses `better-sqlite3`, which is a native C++ module.
+*   **Who needs them?**: Users on platforms **without pre-built binaries** (e.g., Windows ARM64, some Linux distros) must have Python and C++ build tools installed to compile the module from source.
+*   **Windows**: Install via `npm install --global --production windows-build-tools` or Visual Studio Build Tools.
+*   **Linux**: `sudo apt-get install build-essential python3`
 
 ## License
 MIT

@@ -24,6 +24,28 @@ export const REMEMBER_FACT_TOOL: any = {
   }
 };
 
+export const REMEMBER_FACTS_TOOL: any = {
+  name: "remember_facts",
+  description: "Save multiple distinct facts at once. Use this to batch saves and reduce latency.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      facts: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+             text: { type: "string", description: "The fact to remember." },
+             tags: { type: "array", items: { type: "string" }, description: "Tags for this specific fact." }
+          },
+          required: ["text"]
+        }
+      }
+    },
+    required: ["facts"]
+  }
+};
+
 export const RECALL_TOOL: any = {
   name: "recall",
   description: "Search for relevant memories based on a query. Use this to find information from previous conversations that might be relevant to the current context.",

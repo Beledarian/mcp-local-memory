@@ -1,4 +1,4 @@
-import { pipeline } from '@xenova/transformers';
+// import { pipeline } from '@xenova/transformers';
 
 export interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;
@@ -17,6 +17,8 @@ export class LocalEmbedder implements EmbeddingProvider {
   async init() {
     if (!this.pipe) {
       // quantized: true is the default, loads ~23MB model
+      // Dynamic import to avoid sharp dependency if not used or broken
+      const { pipeline } = await import('@xenova/transformers');
       this.pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
     }
   }
@@ -34,9 +36,13 @@ let globalEmbedder: EmbeddingProvider | null = null;
 
 export const getEmbedder = (): EmbeddingProvider => {
     if (!globalEmbedder) {
-        // Switch to LocalEmbedder
-        console.error("Initializing Local Embeddings (all-MiniLM-L6-v2)...");
-        globalEmbedder = new LocalEmbedder();
+        if (process.env.TEST_MODE === 'true') {
+            globalEmbedder = new NoOpEmbedder();
+        } else {
+            // Switch to LocalEmbedder
+            console.error("Initializing Local Embeddings (all-MiniLM-L6-v2)...");
+            globalEmbedder = new LocalEmbedder();
+        }
     }
     return globalEmbedder;
 };

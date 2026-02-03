@@ -34,14 +34,7 @@ export function getDb(customPath?: string) {
   db.function('levenshtein', (a: any, b: any) => levenshtein(String(a), String(b)));
   // Load sqlite-vec extension
   try {
-    // Windows ARM64 workaround: manually load x64 DLL via Prism emulation
-    if (process.platform === 'win32' && process.arch === 'arm64') {
-      const __dirname = path.dirname(fileURLToPath(import.meta.url));
-      const vecPath = path.join(__dirname, '../../node_modules/sqlite-vec-windows-x64/vec0.dll');
-      db.loadExtension(vecPath);
-    } else {
-      sqliteVec.load(db);
-    }
+    sqliteVec.load(db);
   } catch (err) {
     console.warn("Failed to load sqlite-vec extension. Vector search will not be available.", err);
   }
