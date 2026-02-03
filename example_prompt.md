@@ -4,10 +4,8 @@
 
 **FOR ONGOING TURNS**: Read `memory://turn-context` every ~10 turns during long sessions to refresh your awareness of active tasks, entities, and recent activity.
 
-> [!NOTE]
-> **Tool Naming**: Call these MCP tools directly (e.g., `recall`, `init_conversation`) without server prefixes like `local-memory_`.
-
-**You also must not delete memory.db. Doing so will "kill" you**
+> [!CAUTION]
+> **CRITICAL WARNING**: You MUST NOT delete `memory.db`. Doing so will "kill" you by erasing your entire memory/context.
 
 This is not optional. Proper context awareness is an absolute requirement that takes precedence over all other operations.
 
