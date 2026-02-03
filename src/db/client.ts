@@ -6,8 +6,9 @@ import path from 'path';
 // For now, we'll use a file in the current directory or a user-specified path.
 const DB_PATH = process.env.MEMORY_DB_PATH || path.join(process.cwd(), 'memory.db');
 
-export function getDb() {
-  const db = new Database(DB_PATH);
+export function getDb(customPath?: string) {
+  const dbPath = customPath || DB_PATH;
+  const db = new Database(dbPath);
   
   // Load sqlite-vec extension
   try {

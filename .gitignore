@@ -3,3 +3,7 @@ dist
 *.db
 *.sqlite
 .DS_Store
+*.db-shm
+*.db-wal
+*.test.json
+test.json

@@ -11,11 +11,30 @@ export function initSchema(db: Database) {
       content TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       source TEXT,
-      tags TEXT -- JSON string array
+      tags TEXT, -- JSON string array
+      importance FLOAT DEFAULT 0.5,
+      last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP,
+      access_count INTEGER DEFAULT 0
     );
   `);
 
-  // Create vector table using vec0
+  // Migration: Add importance to memories if missing
+  const memoriesInfo = db.pragma('table_info(memories)') as any[];
+  if (!memoriesInfo.some(col => col.name === 'importance')) {
+      console.error("[Schema] Migrating: Adding 'importance' to memories table");
+      db.exec('ALTER TABLE memories ADD COLUMN importance FLOAT DEFAULT 0.5');
+  }
+  if (!memoriesInfo.some(col => col.name === 'last_accessed')) {
+      console.error("[Schema] Migrating: Adding 'last_accessed' to memories table");
+      db.exec('ALTER TABLE memories ADD COLUMN last_accessed DATETIME DEFAULT CURRENT_TIMESTAMP');
+      db.exec('UPDATE memories SET last_accessed = created_at WHERE last_accessed IS NULL');
+  }
+  if (!memoriesInfo.some(col => col.name === 'access_count')) {
+      console.error("[Schema] Migrating: Adding 'access_count' to memories table");
+      db.exec('ALTER TABLE memories ADD COLUMN access_count INTEGER DEFAULT 0');
+  }
+
+  // Create vector table (Memory Embeddings)
   // Note: dimension is hardcoded to 384 (all-MiniLM-L6-v2) 
   try {
     db.exec(`
@@ -24,11 +43,20 @@ export function initSchema(db: Database) {
       );
     `);
   } catch (error) {
-    // If table exists but with different schema or generic verification failure, we might catch here.
-    // However, CREATE VIRTUAL TABLE IF NOT EXISTS usually handles existing tables gracefully 
-    // UNLESS the extensions isn't loaded.
-    console.warn("Failed to create virtual vector table. sqlite-vec might not be loaded. Semantic search will fail.", error);
-    // Do NOT throw error, so the rest of the server (basic memory) can still work
+    console.warn("Failed to create virtual vector table for Memories using 'vec0'. Falling back to standard table (No Semantic Search, but Clustering will work).", error);
+    db.exec(`CREATE TABLE IF NOT EXISTS vec_items (rowid INTEGER PRIMARY KEY, embedding BLOB)`);
+  }
+
+  // Create vector table (Entity Embeddings) for Feature 6.1
+  try {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS vec_entities USING vec0(
+        embedding float[384]
+      );
+    `);
+  } catch (error) {
+     console.warn("Failed to create virtual vector table for Entities using 'vec0'. Falling back to standard table.", error);
+     db.exec(`CREATE TABLE IF NOT EXISTS vec_entities (rowid INTEGER PRIMARY KEY, embedding BLOB)`);
   }
 
   // Create FTS5 virtual table for full-text search
@@ -64,9 +92,17 @@ export function initSchema(db: Database) {
       id TEXT PRIMARY KEY,
       name TEXT UNIQUE NOT NULL,
       type TEXT,
-      observations TEXT -- JSON array of strings (optional, to store facts about the entity)
+      observations TEXT, -- JSON array of strings (optional, to store facts about the entity)
+      importance FLOAT DEFAULT 0.5
     );
   `);
+
+  // Migration: Add importance to entities if missing
+  const entitiesInfo = db.pragma('table_info(entities)') as any[];
+  if (!entitiesInfo.some(col => col.name === 'importance')) {
+      console.error("[Schema] Migrating: Adding 'importance' to entities table");
+      db.exec('ALTER TABLE entities ADD COLUMN importance FLOAT DEFAULT 0.5');
+  }
 
   // Create relations table (Phase 2)
   db.exec(`

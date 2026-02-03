@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs-extra";
@@ -18,15 +20,74 @@ import {
   READ_GRAPH_TOOL,
   RECALL_TOOL,
   REMEMBER_FACT_TOOL,
+  CLUSTER_MEMORIES_TOOL
 } from "./tools/definitions.js";
 import { getArchivist } from "./lib/archivist.js";
 
 // Initialize DB
 const db = getDb();
+
+// Register Custom Functions
+// Leventshtein distance for fuzzy matching
+const levenshtein = (a: string, b: string): number => {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) { matrix[i] = [i]; }
+    for (let j = 0; j <= a.length; j++) { matrix[0][j] = j; }
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            if (b.charAt(i - 1) == a.charAt(j - 1)) {
+                matrix[i][j] = matrix[i - 1][j - 1];
+            } else {
+                matrix[i][j] = Math.min(matrix[i - 1][j - 1] + 1, Math.min(matrix[i][j - 1] + 1, matrix[i - 1][j] + 1));
+            }
+        }
+    }
+    return matrix[b.length][a.length];
+};
+db.function('levenshtein', levenshtein);
+
+// Scoring function for Temporal Decay + Semantic Similarity
+const decay = (importance: number, last_accessed: string | null, access_count: number, distance: number): number => {
+    // 1. Config
+    const halfLife = parseFloat(process.env.MEMORY_HALF_LIFE_WEEKS || '4');
+    const consolidation = parseFloat(process.env.MEMORY_CONSOLIDATION_FACTOR || '1.0');
+    const semanticWeight = parseFloat(process.env.MEMORY_SEMANTIC_WEIGHT || '0.7');
+    const importanceWeight = 1.0 - semanticWeight;
+    
+    // 2. Time Delta (Weeks)
+    const now = new Date();
+    const accessed = last_accessed ? new Date(last_accessed) : new Date(); // If null, assume fresh
+    const diffTime = Math.abs(now.getTime() - accessed.getTime());
+    const weeks = diffTime / (1000 * 60 * 60 * 24 * 7);
+
+    // 3. Stability (Consolidation)
+    // Stability increases with access count. 
+    // log2(1) = 0, log2(2) = 1, log2(4) = 2...
+    const stability = halfLife * (1 + (consolidation * Math.log2(access_count + 1)));
+    
+    // 4. Decayed Importance (Exponential Half-Life)
+    const decayedImportance = (importance || 0.5) * Math.pow(0.5, weeks / stability);
+    
+    // 5. Semantic Similarity
+    // distance is cosine distance (0=identical, 2=opposite). verify sqlite-vec range.
+    // Assuming 0 to 2. Similarity = 1 - (distance / 2)? Or usually just 1 - distance.
+    // Let's assume standard 1 - dist.
+    const similarity = 1.0 - distance;
+    
+    // 6. Final Score (Weighted Mix)
+    return (similarity * semanticWeight) + (decayedImportance * importanceWeight);
+};
+db.function('ranked_score', decay);
+
 initSchema(db);
 
 const embedder = getEmbedder();
-const archivist = getArchivist(db);
+const archivist = getArchivist(db, async (text) => {
+    const vectors = await embedder.embed(text);
+    return Array.from(vectors);
+});
 
 // Create server instance
 const server = new Server(
@@ -37,9 +98,106 @@ const server = new Server(
   {
     capabilities: {
       tools: {},
+      resources: {},
     },
   }
 );
+
+// List available resources
+server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    return {
+        resources: [
+            {
+                uri: "memory://current-context",
+                name: "Current Context",
+                description: "A summary of relevant entities and recent memories for the current session.",
+                mimeType: "text/plain",
+            }
+        ]
+    };
+});
+
+// Read resources
+server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const { uri } = request.params;
+    
+    if (uri === "memory://current-context") {
+        const limitEnv = process.env.CONTEXT_WINDOW_LIMIT;
+        const limit = limitEnv ? parseInt(limitEnv, 10) : 500;
+        
+        const entitiesLimit = parseInt(process.env.CONTEXT_MAX_ENTITIES || '5', 10);
+        const memoriesLimit = parseInt(process.env.CONTEXT_MAX_MEMORIES || '5', 10);
+        
+        // --- SMART CONTEXT LOGIC ---
+        
+        // 1. Recent Memories
+        const recentMemories = db.prepare(`SELECT content, created_at FROM memories ORDER BY created_at DESC LIMIT ?`).all(memoriesLimit) as any[];
+        
+        // 2. Active Entities (Entities mentioned in recent memories)
+        // Accessing 'tags' is a cheap proxy if NLP filled them, or we scan content?
+        // Better: Find entities that were updated recently? Or just global VIPs + search?
+        // Let's stick to Global VIPs + Manual "Active" list if we had one.
+        // For now: Global Importance is the most reliable signal we have.
+        // IMPROVEMENT: "Entities recently modified or created"
+        // Let's add: Top N Important Entities
+        let importantEntities = [];
+        try {
+             importantEntities = db.prepare(`SELECT name, type, observations FROM entities ORDER BY importance DESC LIMIT ?`).all(entitiesLimit) as any[];
+        } catch (e) {
+             importantEntities = db.prepare(`SELECT name, type, observations FROM entities LIMIT ?`).all(entitiesLimit) as any[];
+        }
+
+        // 3. Recently Active Entities (Created/Updated recently)
+        // We assume 'rowid' is roughly chronological or 'id' if time-sortable. 
+        // Best proxy without a 'updated_at' column is just reliance on importance or recent memories content.
+        // Let's try to match entities in recent memories content (simple string match)
+        const recentContent = recentMemories.map(m => m.content).join(' ');
+        // Find entities whose names appear in recent content
+        // This is a "Poor man's active context" but effective locally.
+        const allEntities = db.prepare('SELECT name, type, observations FROM entities').all() as any[];
+        const activeEntities = allEntities.filter(e => recentContent.includes(e.name)).slice(0, entitiesLimit);
+        
+        // Deduplicate Important vs Active
+        const combinedEntities = [...importantEntities];
+        activeEntities.forEach(ae => {
+            if (!combinedEntities.find(ce => ce.name === ae.name)) {
+                combinedEntities.push(ae);
+            }
+        });
+        
+        let context = "=== CURRENT CONTEXT ===\n\n";
+        
+        if (combinedEntities.length > 0) {
+            context += "Relevant Entities:\n";
+            combinedEntities.forEach(e => {
+                const obs = JSON.parse(e.observations || '[]');
+                const obsStr = obs.length > 0 ? ` (${obs.join(', ')})` : '';
+                context += `- ${e.name} [${e.type}]${obsStr}\n`;
+            });
+            context += "\n";
+        }
+        
+        context += "Recent Memories:\n";
+        recentMemories.forEach(m => {
+            context += `- ${m.content} (${m.created_at})\n`;
+        });
+        
+        // Truncate if needed
+        if (context.length > limit) {
+            context = context.substring(0, limit) + "... (truncated)";
+        }
+        
+        return {
+            contents: [{
+                uri: uri,
+                mimeType: "text/plain",
+                text: context
+            }]
+        };
+    }
+    
+    throw new Error(`Resource not found: ${uri}`);
+});
 
 // List available tools
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -91,7 +249,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
         // 3. Trigger Archivist (Auto-Ingestion)
         // Fire and forget - don't block the response
-        archivist.process(text).catch(err => console.error("Archivist error:", err));
+        archivist.process(text, id).catch(err => console.error("Archivist error:", err));
 
         return {
           content: [
@@ -125,14 +283,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   m.id, 
                   m.content, 
                   m.created_at,
-                  vec_distance_cosine(v.embedding, ?) as distance
+                  m.importance,
+                  m.last_accessed,
+                  m.access_count,
+                  vec_distance_cosine(v.embedding, ?) as distance,
+                  ranked_score(m.importance, m.last_accessed, m.access_count, vec_distance_cosine(v.embedding, ?)) as score
                 FROM vec_items v
                 JOIN memories m ON v.rowid = m.rowid
-                ORDER BY distance
+                ORDER BY score DESC
                 LIMIT ?
                 `
               )
-              .all(Buffer.from(float32Embedding.buffer), limit) as any[];
+              .all(Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer), limit) as any[];
+              
+             // Update Access Stats (Consolidation)
+             if (results.length > 0) {
+                 const ids = results.map(r => r.id);
+                 const ph = ids.map(() => '?').join(',');
+                 db.prepare(`UPDATE memories SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1 WHERE id IN (${ph})`).run(...ids);
+             }
         } catch (err) {
             // Vector search failed (likely missing extension), fall back to FTS
              usedSearchMethod = "fts-fallback";
@@ -231,20 +400,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const type = args?.type as string;
         const observations = (args?.observations as string[]) || [];
 
+        // Check for existing entity via fuzzy match (Levenshtein <= 2)
+        const existing = db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(name) as any;
+        
+        if (existing) {
+             return {
+                content: [{ type: "text", text: `Entity '${name}' already exists (as '${existing.name}'). ID: ${existing.id}` }]
+            };
+        }
+
         const id = uuidv4();
         
         try {
             db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, type, JSON.stringify(observations));
+            
+            // Feature 6.1: Generate Entity Embedding
+            embedder.embed(name + " " + type).then(vec => {
+                const float32 = new Float32Array(vec);
+                try {
+                    db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(id, Buffer.from(float32.buffer));
+                } catch (e) { console.warn("Entity embedding insert failed:", e); }
+            }).catch(e => console.error("Embedding generation failed:", e));
+
             return {
                 content: [{ type: "text", text: `Created entity '${name}' of type '${type}'` }]
             };
         } catch (error: any) {
-            if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-                 // Entity exists, maybe update it? For now just return success/info
-                 return {
-                    content: [{ type: "text", text: `Entity '${name}' already exists.` }]
-                };
-            }
             throw error;
         }
       }
@@ -283,51 +464,100 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "read_graph": {
-        // Simple implementation: return immediate neighbors or all if no center
         const center = args?.center as string | undefined;
+        const depth = Math.min((args?.depth as number) || 1, 3); // Max depth 3 to prevent explosion
         
         let nodes: any[] = [];
         let edges: any[] = [];
 
         if (center) {
-            // Find entity
-            const entity = db.prepare(`SELECT * FROM entities WHERE name = ?`).get(center);
-            if (!entity) {
-                 return { content: [{ type: "text", text: `Entity '${center}' not found.` }] };
-            }
-            nodes.push(entity);
-            
-            // Find outgoing edges
-            const outgoing = db.prepare(`SELECT * FROM relations WHERE source = ?`).all(center) as any[];
-            edges.push(...outgoing);
-            
-            // Should we add the target nodes?
-            for (const edge of outgoing) {
-                const targetNode = db.prepare(`SELECT * FROM entities WHERE name = ?`).get(edge.target);
-                if (targetNode) nodes.push(targetNode);
+            // Check if center exists (fuzzy?)
+            let centerEntity = db.prepare('SELECT * FROM entities WHERE name = ?').get(center) as any;
+            if (!centerEntity) {
+                 centerEntity = db.prepare('SELECT * FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1').get(center) as any;
             }
             
-            // Find incoming edges? - Usually useful for a graph
-             const incoming = db.prepare(`SELECT * FROM relations WHERE target = ?`).all(center) as any[];
-             edges.push(...incoming);
-             
-             for (const edge of incoming) {
-                 // Prevent duplicates if possible, but distinct push is okay for JSON
-                 const sourceNode = db.prepare(`SELECT * FROM entities WHERE name = ?`).get(edge.source);
-                 // Check if in nodes already (simple check by ID or Name)
-                 if (sourceNode && !nodes.find((n:any) => n.name === (sourceNode as any).name)) {
-                     nodes.push(sourceNode);
-                 }
-             }
+            if (!centerEntity) {
+                  return { content: [{ type: "text", text: `Entity '${center}' not found.` }] };
+            }
+            
+            // RECURSIVE CTE for Graph Traversal
+            // We want to find all relations starting from center, up to depth N
+            // RECURSIVE CTE for Graph Traversal
+            // We want to find all relations starting from center, up to depth N
+            const query = `
+                WITH RECURSIVE bfs(name, depth) AS (
+                    SELECT name, 0 FROM entities WHERE name = ?
+                    UNION
+                    SELECT 
+                        CASE WHEN r.source = bfs.name THEN r.target ELSE r.source END, 
+                        bfs.depth + 1
+                    FROM relations r
+                    JOIN bfs ON (r.source = bfs.name OR r.target = bfs.name)
+                    WHERE bfs.depth < ?
+                )
+                SELECT DISTINCT r.source, r.target, r.relation 
+                FROM relations r
+                JOIN bfs b1 ON r.source = b1.name
+                JOIN bfs b2 ON r.target = b2.name
+                WHERE b1.depth <= ? AND b2.depth <= ?;
+            `;
+            // Note: The previous query logic was a bit circular. 
+            // The BFS finds nodes. Then we fetch edges connecting any two found nodes.
+            // This is safer than trying to track edges in the recursion directly which complicates undirected logic.
+            
+            edges = db.prepare(query).all(centerEntity.name, depth, depth, depth) as any[];
+            
+            // Collect all unique node names from edges + center
+            const nodeNames = new Set<string>();
+            nodeNames.add(centerEntity.name);
+            edges.forEach(e => {
+                nodeNames.add(e.source);
+                nodeNames.add(e.target);
+            });
+            
+            // Fetch node details
+            const placeholders = Array.from(nodeNames).map(() => '?').join(',');
+            nodes = db.prepare(`SELECT * FROM entities WHERE name IN (${placeholders})`).all(...Array.from(nodeNames)) as any[];
+            
         } else {
-             // Return everything (LIMIT?)
-             nodes = db.prepare(`SELECT * FROM entities LIMIT 100`).all();
-             edges = db.prepare(`SELECT * FROM relations LIMIT 100`).all();
+             // Return simplified overview
+             nodes = db.prepare(`SELECT * FROM entities ORDER BY importance DESC LIMIT 50`).all() as any[];
+             const names = nodes.map(n => n.name);
+             if (names.length > 0) {
+                 const ph = names.map(() => '?').join(',');
+                 edges = db.prepare(`SELECT * FROM relations WHERE source IN (${ph}) AND target IN (${ph}) LIMIT 100`).all(...names, ...names) as any[];
+             }
         }
 
         return {
             content: [{ type: "text", text: JSON.stringify({ nodes, edges }, null, 2) }]
         };
+      }
+
+      case "cluster_memories": {
+        const k = (args?.k as number) || 5;
+        try {
+            const { MemoryClusterer } = await import('./lib/clustering.js');
+            const clusterer = new MemoryClusterer(db);
+            const clusters = await clusterer.cluster(k);
+            
+             return {
+                content: [
+                {
+                    type: "text",
+                    text: JSON.stringify({
+                        clusters: clusters
+                    }, null, 2),
+                },
+                ],
+            };
+        } catch (err: any) {
+            return {
+                content: [{ type: 'text', text: `Clustering failed: ${err.message}` }],
+                isError: true
+            };
+        }
       }
 
       default:

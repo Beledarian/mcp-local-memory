@@ -109,7 +109,8 @@ export const CREATE_RELATION_TOOL: any = {
     properties: {
       source: { type: "string", description: "The name of the source entity." },
       target: { type: "string", description: "The name of the target entity." },
-      relation: { type: "string", description: "The verb describing the relationship (e.g., 'knows', 'authored', 'located_in')." }
+      relation: { type: "string", description: "The verb describing the relationship (e.g., 'knows', 'authored', 'located_in')." },
+      depth: { type: "number", description: "Traversal depth (default 1, max 3)" }
     },
     required: ["source", "target", "relation"]
   }
@@ -126,3 +127,16 @@ export const READ_GRAPH_TOOL: any = {
     }
   }
 };
+
+export const CLUSTER_MEMORIES_TOOL: any = {
+  name: "cluster_memories",
+  description: "Cluster memories into topics. Useful for getting a high-level overview of what knowledge is stored.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      k: { type: "number", description: "Number of topics to generate (default 5)." }
+    }
+  }
+};
+
+
