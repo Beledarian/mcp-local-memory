@@ -149,8 +149,8 @@ export function initSchema(db: Database) {
   // We can check if we can run a dummy update or checking SQL
   // Easier: check sql from sqlite_master
   const relationsSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='relations'").get() as any;
-  if (relationsSql && !relationsSql.sql.includes('ON UPDATE CASCADE')) {
-      console.log("[Schema] Migrating: Recreating relations table with ON UPDATE CASCADE");
+      if (relationsSql && !relationsSql.sql.includes('ON UPDATE CASCADE')) {
+      console.error("[Schema] Migrating: Recreating relations table with ON UPDATE CASCADE");
       db.transaction(() => {
           db.exec("ALTER TABLE relations RENAME TO relations_old");
           db.exec(`
@@ -176,7 +176,7 @@ export function initSchema(db: Database) {
          // Attempt to migrate old JSON observations
          const entities = db.prepare("SELECT id, observations FROM entities WHERE observations IS NOT NULL AND observations != '[]'").all() as any[];
          if (entities.length > 0) {
-             console.log("Migrating entity observations...");
+             console.error("Migrating entity observations...");
              const insert = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
              const transaction = db.transaction((list) => {
                  for (const ent of list) {
@@ -189,7 +189,7 @@ export function initSchema(db: Database) {
                  }
              });
              transaction(entities);
-             console.log(`Migrated observations for ${entities.length} entities.`);
+             console.error(`Migrated observations for ${entities.length} entities.`);
          }
      }
   } catch (e) {
