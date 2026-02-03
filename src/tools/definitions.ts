@@ -139,4 +139,27 @@ export const CLUSTER_MEMORIES_TOOL: any = {
   }
 };
 
+export const CONSOLIDATE_CONTEXT_TOOL: any = {
+  name: "consolidate_context",
+  description: "OPTIONAL: Extract important facts from a brief conversation summary. Agent provides 50-100 token summary of recent discussion. Tool extracts structured, novel facts using NLP or LLM. Use to catch memories the agent might have missed explicitly saving.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      text: {
+        type: "string",
+        description: "Brief conversation summary (e.g., 'Discussed Python for data science, TypeScript frustrations, CEOSim project development'). Keep concise to minimize tokens."
+      },
+      strategy: {
+        type: "string",
+        enum: ["nlp", "llm"],
+        description: "Extraction strategy: 'nlp' (fast, offline) or 'llm' (thorough, requires Ollama). Default: 'nlp'."
+      },
+      limit: {
+        type: "number",
+        description: "Maximum memories to extract (default: 5)."
+      }
+    },
+    required: ["text"]
+  }
+};
 

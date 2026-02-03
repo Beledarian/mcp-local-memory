@@ -140,6 +140,15 @@ The server exposes the following MCP tools:
 -   **`read_graph(center?, depth?)`**: Explore the network of linked facts.
 -   **`cluster_memories(k?)`**: Group knowledge into k topics to get a bird's-eye view.
 
+### Retrospective Extraction
+-   **`consolidate_context(text, strategy?, limit?)`** *(OPTIONAL)*: Extract important facts from a brief conversation summary (~50-100 tokens). Uses NLP or LLM to identify novel memories the agent might have missed explicitly saving. Returns extracted facts for agent to selectively save.
+    - **`strategy`**: `'nlp'` (fast, offline, default) or `'llm'` (thorough, requires Ollama)
+    - **Token Cost**: ~80 tokens (summary) + ~200 tokens (LLM) = **~280 tokens total** (vs 3,000+ for full transcript)
+    - **Example**: `consolidate_context(text="Discussed Python for data science, TypeScript frustrations, CEOSim project", strategy="llm")`
+
+> [!NOTE]
+> **For Chat App Developers**: The consolidate tool is designed for manual agent use. However, chat apps can integrate NLP/LLM logic directly into the client for **automatic, zero-cost context parsing**. See [Advanced Integrations](#advanced-integration-possibilities) below.
+
 ### 🧠 Advanced Capabilities
 
 #### Project Tagging (Auto-Organization)

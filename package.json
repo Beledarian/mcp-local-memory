@@ -16,7 +16,7 @@
     "compromise": "^14.14.5",
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
-    "sqlite-vec-windows-x64": "^0.1.7-alpha.2",
+    "sqlite-vec-linux-arm64": "^0.1.7-alpha.2",
     "uuid": "^9.0.1",
     "zod": "^3.22.4"
   },

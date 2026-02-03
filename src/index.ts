@@ -20,7 +20,8 @@ import {
   READ_GRAPH_TOOL,
   RECALL_TOOL,
   REMEMBER_FACT_TOOL,
-  CLUSTER_MEMORIES_TOOL
+  CLUSTER_MEMORIES_TOOL,
+  CONSOLIDATE_CONTEXT_TOOL
 } from "./tools/definitions.js";
 import { getArchivist } from "./lib/archivist.js";
 
@@ -211,6 +212,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       CREATE_ENTITY_TOOL,
       CREATE_RELATION_TOOL,
       READ_GRAPH_TOOL,
+      CONSOLIDATE_CONTEXT_TOOL,
     ],
   };
 });
@@ -572,7 +574,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             const clusterer = new MemoryClusterer(db);
             const clusters = await clusterer.cluster(k);
             
-             return {
+            return {
                 content: [
                 {
                     type: "text",
@@ -587,6 +589,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 content: [{ type: 'text', text: `Clustering failed: ${err.message}` }],
                 isError: true
             };
+        }
+      }
+
+      case "consolidate_context": {
+        const text = args?.text as string;
+        const strategy = (args?.strategy as string) || 'nlp';
+        const limit = (args?.limit as number) || 5;
+
+        try {
+          const { Consolidator } = await import('./lib/consolidator.js');
+          const consolidator = new Consolidator(db, async (text) => {
+            const vectors = await embedder.embed(text);
+            return Array.from(vectors);
+          });
+
+          const extracted = await consolidator.extract(text, strategy, limit);
+
+          return {
+            content: [{
+              type: "text",
+              text: `Extracted ${extracted.length} novel memories:\n\n` +
+                    extracted.map((m, i) => `${i+1}. ${m.text} (importance: ${m.importance}, tags: ${m.tags.join(', ')})`).join('\n') +
+                    `\n\nTo save a memory: remember_fact(text="...", tags=[...])`
+            }]
+          };
+        } catch (err: any) {
+          return {
+            content: [{ type: 'text', text: `Consolidation failed: ${err.message}` }],
+            isError: true
+          };
         }
       }
 

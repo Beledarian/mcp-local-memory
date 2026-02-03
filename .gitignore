@@ -1,9 +1,10 @@
-node_modules
-dist
+node_modules/
+dist/
 *.db
-*.sqlite
-.DS_Store
 *.db-shm
 *.db-wal
 *.test.json
 test.json
+test_tags.db
+test_wsl.sh
+sqlite-vec/

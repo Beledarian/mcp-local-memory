@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "local-memory": {
+      "command": "wsl",
+      "args": [
+        "bash",
+        "-c",
+        "cd ~/mcp-local-memory && node dist/index.js"
+      ],
+      "env": {
+        "MEMORY_DB_PATH": "/mnt/c/Users/Laurin/.memory/memory.db",
+        "ARCHIVIST_STRATEGY": "nlp",
+        "USE_WORKER": "true",
+        "TAG_MATCH_BOOST": "0.15",
+        "MEMORY_HALF_LIFE_WEEKS": "4.0",
+        "MEMORY_CONSOLIDATION_FACTOR": "1.0",
+        "MEMORY_SEMANTIC_WEIGHT": "0.7"
+      }
+    }
+  }
+}
