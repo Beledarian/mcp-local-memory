@@ -26,3 +26,5 @@ export_*.json
 soul/
 *.soul.ts
 .personal/
+
+sync_wsl.sh

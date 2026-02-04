@@ -34,6 +34,12 @@ Unlike standard agent memories that are ephemeral or locked to a single session,
 -   **Node.js**: v18 or higher.
 -   **Build Tools**: Python and C++ build tools (required by `better-sqlite3` native compilation).
 
+> [!IMPORTANT]
+> **Windows Users**: You MUST have C++ Build Tools installed.
+> Run: `npm install --global --production windows-build-tools` 
+> OR install "Desktop development with C++" via Visual Studio Installer.
+> *Failure to do this will result in `gyp` errors during installation.*
+
 ### Quick Start
 
 1.  **Clone the repository**:

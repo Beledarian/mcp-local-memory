@@ -40,13 +40,8 @@ export function handleInitConversation(db: Database, args: { name?: string }) {
     // 1b. Agent Info: Find entity representing the agent (type='AI Agent' or name in ['Antigravity', 'I'])
     const agentEntity = db.prepare(`
         SELECT name, type FROM entities 
-        WHERE type = 'AI Agent' OR name IN ('Antigravity', 'I')
-        ORDER BY 
-            CASE 
-                WHEN name = 'Antigravity' THEN 1
-                WHEN name = 'I' THEN 2
-                ELSE 3
-            END
+        WHERE type = 'AI Agent' OR name = 'I'
+        ORDER BY importance DESC
         LIMIT 1
     `).get() as any;
     
