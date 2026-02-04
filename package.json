@@ -1,11 +1,22 @@
 {
-  "name": "mcp-local-memory",
-  "version": "0.1.0",
+  "name": "@beledarian/mcp-local-memory",
+  "version": "1.0.4",
   "description": "Local memory server for AI agents using SQLite and MCP",
   "main": "dist/index.js",
+  "bin": {
+    "mcp-local-memory": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && shx chmod +x dist/index.js",
     "sync": "wsl ./sync_wsl.sh",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
@@ -30,7 +41,8 @@
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.11.19",
     "@types/uuid": "^9.0.8",
-    "fs-extra": "^11.2.0",
+    "fs-extra": "^11.3.3",
+    "shx": "^0.4.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"
   }

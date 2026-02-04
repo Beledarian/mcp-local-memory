@@ -1,0 +1,14 @@
+{
+  "name": "mcp-local-memory",
+  "version": "1.0.3",
+  "description": "Local memory for AI agents using SQLite and MCP. Remembers facts, entities, and relations across sessions.",
+  "mcpServers": {
+    "local-memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@beledarian/mcp-local-memory"
+      ]
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Smithery.ai Configuration
+# https://smithery.ai/docs/config
+
+startCommand:
+  type: stdio
+  config:
+    command: "npx"
+    args:
+      - "-y"
+      - "@beledarian/mcp-local-memory"

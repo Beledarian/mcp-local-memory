@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -8,7 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { v4 as uuidv4 } from "uuid";
 import fs from "fs-extra";
-import { getDb } from "./db/client.js";
+import { getDb, RESOLVED_DB_PATH } from "./db/client.js";
 import { initSchema } from "./db/schema.js";
 import { getEmbedder } from "./lib/embeddings.js";
 import * as chrono from 'chrono-node';
@@ -47,8 +48,8 @@ const extensions = loadExtensions(EXTENSIONS_PATH);
 
 // Initialize DB
 const db = getDb();
-try { fs.writeFileSync('/tmp/mcp_db_path.txt', process.env.MEMORY_DB_PATH || 'DEFAULT'); } catch(e) {}
-console.error(`[Server] Database initialized at: ${process.env.MEMORY_DB_PATH || 'default (memory.db)'}`);
+try { fs.writeFileSync('/tmp/mcp_db_path.txt', RESOLVED_DB_PATH); } catch(e) {}
+console.error(`[Server] Database initialized at: ${RESOLVED_DB_PATH}`);
 
 // Register Custom Functions
 // Leventshtein distance for fuzzy matching

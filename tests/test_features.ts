@@ -7,6 +7,7 @@ import { getArchivist } from '../src/lib/archivist.js';
 process.env.USE_WORKER = 'false';
 process.env.MEMORY_HALF_LIFE_WEEKS = '4';
 process.env.ARCHIVIST_STRATEGY = 'nlp';
+process.env.EXTRACT_COMPLEX_CONCEPTS = 'false';
 
 // Mock Embeddings for Clustering Test
 const MOCK_VECTORS: Record<string, number[]> = {

@@ -3,9 +3,13 @@ import * as sqliteVec from 'sqlite-vec';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+import os from 'os';
+import fs from 'fs-extra';
+
 // Load the database file. If allowed, we should put it in a persistent location.
-// For now, we'll use a file in the current directory or a user-specified path.
-const DB_PATH = process.env.MEMORY_DB_PATH || path.join(process.cwd(), 'memory.db');
+// Default to ~/.memory/memory.db
+const DEFAULT_PATH = path.join(os.homedir(), '.memory', 'memory.db');
+export const RESOLVED_DB_PATH = process.env.MEMORY_DB_PATH || DEFAULT_PATH;
 
 function levenshtein(a: string, b: string): number {
   if (a.length < b.length) [a, b] = [b, a];
@@ -27,7 +31,15 @@ function levenshtein(a: string, b: string): number {
 }
 
 export function getDb(customPath?: string) {
-  const dbPath = customPath || DB_PATH;
+  const dbPath = customPath || RESOLVED_DB_PATH;
+  
+  // Ensure directory exists
+  try {
+    fs.ensureDirSync(path.dirname(dbPath));
+  } catch (e) {
+    console.error(`Failed to create database directory at ${path.dirname(dbPath)}`, e);
+  }
+
   const db = new Database(dbPath);
   
   // Register custom functions

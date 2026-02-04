@@ -1,5 +1,9 @@
 # Local Memory MCP Server 🧠
 
+> [!IMPORTANT]
+> **Windows Users**: You **MUST** have C++ Build Tools installed to use this package (projects using `better-sqlite3` require native compilation).
+> Run: `npm install --global --production windows-build-tools` OR install "Desktop development with C++" via Visual Studio Installer.
+
 A lightweight, privacy-first, "Zero-Docker" memory server for AI agents. This server provides semantic search, keyword search, and a knowledge graph—all running natively on your local machine.
 
 ## Key Features
@@ -40,7 +44,37 @@ Unlike standard agent memories that are ephemeral or locked to a single session,
 > OR install "Desktop development with C++" via Visual Studio Installer.
 > *Failure to do this will result in `gyp` errors during installation.*
 
-### Quick Start
+## 📦 Installation & Setup
+
+### Method 1: Use via NPX (Recommended)
+
+You can use the server directly without installing it globally, using `npx`. This is the easiest way to use it with MCP clients like Claude Desktop.
+
+**Add to your MCP Configuration:**
+
+```json
+{
+  "mcpServers": {
+    "local-memory": {
+      "command": "npx",
+      "args": ["-y", "@beledarian/mcp-local-memory"],
+      "env": {
+        "ARCHIVIST_STRATEGY": "nlp"
+      }
+    }
+  }
+}
+```
+
+### Method 2: Install via NPM
+
+If you prefer a global installation:
+
+```bash
+npm install -g @beledarian/mcp-local-memory
+```
+
+### Method 3: Install from Source (For Contributors)
 
 1.  **Clone the repository**:
     ```bash
@@ -85,25 +119,7 @@ Control the server behavior via environment variables:
 | `EMBEDDING_CONCURRENCY` | Integer | `5` | Max concurrent embedding operations for `remember_facts`. Higher values = faster batch processing but more CPU/memory usage. |
 | `EXTENSIONS_PATH` | Path to directory | (none) | Optional path to load custom tool extensions from external directory. Allows adding private/experimental tools without modifying the codebase. |
 
-## Quick Start Configuration (Standard)
 
-Add this to your `mcp_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "local-memory": {
-      "command": "node",
-      "args": ["/path/to/mcp-local-memory/dist/index.js"],
-      "env": {
-        "ARCHIVIST_STRATEGY": "nlp"
-      }
-    }
-  }
-}
-```
-
-## Advanced Configuration (with Ollama)
 
 To enable AI-powered entity extraction, importance scoring, and auto-labeling, run [Ollama](https://ollama.com/) locally.
 
@@ -206,8 +222,8 @@ export const MY_TOOL_TOOL = {
 
 For effective agent interaction with this memory server, we recommend using a detailed system prompt.
 
-- **Quick Start**: See [example_instructions.md](example_instructions.md)
-- **Comprehensive Rules**: See [detailed_prompt.md](detailed_prompt.md)
+- **Quick Start**: See [docs/example_instructions.md](docs/example_instructions.md)
+- **Comprehensive Rules**: See [docs/detailed_prompt.md](docs/detailed_prompt.md)
 
 ---
 
