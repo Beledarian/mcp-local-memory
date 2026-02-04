@@ -38,7 +38,7 @@ Unlike standard agent memories that are ephemeral or locked to a single session,
 
 1.  **Clone the repository**:
     ```bash
-    git clone https://github.com/Laurin/mcp-local-memory.git
+    git clone https://github.com/Beledarian/mcp-local-memory.git
     cd mcp-local-memory
     ```
 2.  **Install dependencies**:
