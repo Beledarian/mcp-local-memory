@@ -22,3 +22,9 @@ export_*.json
 *.log
 .DS_Store
 .env
+
+# Antigravity's Soul - Private extensions
+**/who_am_i*
+soul/
+*.soul.ts
+.personal/

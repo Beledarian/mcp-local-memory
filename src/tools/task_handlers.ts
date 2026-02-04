@@ -37,6 +37,43 @@ export function handleInitConversation(db: Database, args: { name?: string }) {
         context.user_info = null;
     }
     
+    // 1b. Agent Info: Find entity representing the agent (type='AI Agent' or name in ['Antigravity', 'I'])
+    const agentEntity = db.prepare(`
+        SELECT name, type FROM entities 
+        WHERE type = 'AI Agent' OR name IN ('Antigravity', 'I')
+        ORDER BY 
+            CASE 
+                WHEN name = 'Antigravity' THEN 1
+                WHEN name = 'I' THEN 2
+                ELSE 3
+            END
+        LIMIT 1
+    `).get() as any;
+    
+    if (agentEntity) {
+        const observations = db.prepare(`
+            SELECT content FROM entity_observations 
+            WHERE entity_id = (SELECT id FROM entities WHERE name = ? LIMIT 1)
+            ORDER BY created_at DESC LIMIT 5
+        `).all(agentEntity.name) as any[];
+        
+        // Get prominent relations from/to the agent
+        const agentRelations = db.prepare(`
+            SELECT source, relation, target FROM relations
+            WHERE source = ? OR target = ?
+            LIMIT 5
+        `).all(agentEntity.name, agentEntity.name);
+        
+        context.agent_info = {
+            name: agentEntity.name,
+            type: agentEntity.type,
+            observations: observations.map(o => o.content),
+            relations: agentRelations
+        };
+    } else {
+        context.agent_info = null;
+    }
+    
     // 2. Recent Memories: Last 5 memories
     context.recent_memories = db.prepare(`
         SELECT content, created_at FROM memories 
@@ -188,3 +225,5 @@ export function handleDeleteTask(db: Database, args: { id: string }) {
         message: `Task ${id} deleted successfully`
     };
 }
+
+

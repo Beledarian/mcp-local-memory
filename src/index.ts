@@ -39,6 +39,11 @@ import {
 } from "./tools/definitions.js";
 import { getArchivist } from "./lib/archivist.js";
 import * as taskHandlers from './tools/task_handlers.js';
+import { loadExtensions } from "./lib/extensions.js";
+
+// Load extensions
+const EXTENSIONS_PATH = process.env.EXTENSIONS_PATH;
+const extensions = loadExtensions(EXTENSIONS_PATH);
 
 // Initialize DB
 const db = getDb();
@@ -491,6 +496,11 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     UPDATE_ENTITY_TOOL,
   ];
 
+  // Add extensions
+  for (const ext of extensions) {
+    tools.push(ext.tool);
+  }
+
   // consolidate_context is opt-in via environment variable
   if (process.env.ENABLE_CONSOLIDATE_TOOL === 'true') {
     tools.push(CONSOLIDATE_CONTEXT_TOOL);
@@ -510,30 +520,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const tags = (args?.tags as string[]) || [];
         const id = uuidv4();
         
-        // 1. Get embedding (pure semantic - tags handled in post-filter)
-        const embedding = await embedder.embed(text);
-        const float32Embedding = new Float32Array(embedding);
-
-        // 2. Insert into DB transactionally
+        // 1. Insert text into DB immediately (FAST)
         const insertTx = db.transaction(() => {
             db.prepare(
                 `INSERT INTO memories (id, content, tags, last_accessed, importance) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0.5)`
             ).run(id, text, JSON.stringify(tags));
+        });
+        insertTx();
 
+        // 2. Background Processing (ASYNC - Don't wait)
+        (async () => {
             try {
+                // Get embedding
+                const embedding = await embedder.embed(text);
+                const float32Embedding = new Float32Array(embedding);
+
+                // Insert embedding
                 db.prepare(
                     `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
                 ).run(id, Buffer.from(float32Embedding.buffer));
+                
+                // Trigger Archivist
+                await archivist.process(text, id);
             } catch (err) {
-                console.warn("Could not insert vector embedding (sqlite-vec might be missing):", err);
-            }
-        });
-        
-        insertTx();
-
-        // 3. Trigger Archivist (Auto-Ingestion)
-        // Fire and forget - don't block the response (LATENCY OPTIMIZATION)
-        archivist.process(text, id).catch(err => console.error("Archivist error:", err));
+                console.error(`Error processing background task for fact ${id}:`, err);
+           }
+        })();
 
         return {
           content: [
@@ -561,24 +573,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         });
         insertTx();
 
-        // Background Processing (Slow)
-        // We do NOT await this, to return control to the LLM immediately.
+        // Background Processing (PARALLEL with concurrency limit)
+        const EMBEDDING_CONCURRENCY = parseInt(process.env.EMBEDDING_CONCURRENCY || '5');
+        
         (async () => {
-             for (const f of facts) {
-                 try {
-                    // 1. Embedding
-                    const embedding = await embedder.embed(f.text);
-                    const float32Embedding = new Float32Array(embedding);
-                    db.prepare(
-                        `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
-                    ).run(f.id, Buffer.from(float32Embedding.buffer));
-                    
-                    // 2. Archivist
-                    await archivist.process(f.text, f.id);
-                 } catch (e) {
-                     console.error(`Error processing background task for fact ${f.id}:`, e);
-                 }
-             }
+            // Process in batches to limit concurrency
+            for (let i = 0; i < facts.length; i += EMBEDDING_CONCURRENCY) {
+                const batch = facts.slice(i, i + EMBEDDING_CONCURRENCY);
+                await Promise.all(batch.map(async (f) => {
+                    try {
+                        // 1. Embedding (concurrent within batch)
+                        const embedding = await embedder.embed(f.text);
+                        const float32Embedding = new Float32Array(embedding);
+                        db.prepare(
+                            `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
+                        ).run(f.id, Buffer.from(float32Embedding.buffer));
+                        
+                        // 2. Archivist (concurrent within batch)
+                        await archivist.process(f.text, f.id);
+                    } catch (e) {
+                        console.error(`Error processing background task for fact ${f.id}:`, e);
+                    }
+                }));
+            }
         })();
 
         return {
@@ -762,7 +779,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                     debugSteps.push("Updating access stats...");
                     const ids = results.map(r => r.id);
                     const ph = ids.map(() => '?').join(',');
-                    db.prepare(`UPDATE memories SET last_accessed = CURRENT_TIMESTAMP, access_count = access_count + 1 WHERE id IN (${ph})`).run(...ids);
+                    
+                    // Update access count first
+                    db.prepare(`
+                        UPDATE memories 
+                        SET last_accessed = CURRENT_TIMESTAMP, 
+                            access_count = access_count + 1
+                        WHERE id IN (${ph})
+                    `).run(...ids);
+                    
+                    // Then calculate logarithmic importance based on new access_count
+                    // Formula: importance = 0.5 + 0.5 * (ln(access_count + 1) / ln(21))
+                    // This gives: 1 access → 0.73, 5 → 0.92, 10 → 0.97, 20 → 1.0
+                    db.prepare(`
+                        UPDATE memories
+                        SET importance = 0.5 + 0.5 * (log(access_count + 1) / log(21))
+                        WHERE id IN (${ph})
+                    `).run(...ids);
+                    
                     debugSteps.push("Access stats updated.");
                 } catch (updateErr: any) {
                     console.warn("Failed to update access stats (non-critical):", updateErr.message);
@@ -1096,6 +1130,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               }]
           };
 
+
       case "add_task":
           return {
               content: [{
@@ -1230,8 +1265,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           }
       }
 
-      default:
+      default: {
+        // Check if it's an extension tool
+        const extension = extensions.find(ext => ext.tool.name === name);
+        if (extension) {
+            const result = extension.handler(db, args);
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify(result, null, 2),
+                    },
+                ],
+            };
+        }
         throw new Error(`Unknown tool: ${name}`);
+      }
     }
   } catch (error: any) {
     return {

@@ -34,13 +34,25 @@ Unlike standard agent memories that are ephemeral or locked to a single session,
 -   **Node.js**: v18 or higher.
 -   **Build Tools**: Python and C++ build tools (required by `better-sqlite3` native compilation).
 
-### 2. Setup
-```bash
-git clone https://github.com/Beledarian/mcp-local-memory.git
-cd mcp-local-memory
-npm install
-npm run build
-```
+### Quick Start
+
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/Laurin/mcp-local-memory.git
+    cd mcp-local-memory
+    ```
+2.  **Install dependencies**:
+    ```bash
+    npm install
+    ```
+3.  **Build the project**:
+    ```bash
+    npm run build
+    ```
+4.  **Run the server**:
+    ```bash
+    npm start
+    ```
 
 ---
 
@@ -64,6 +76,8 @@ Control the server behavior via environment variables:
 | `MEMORY_SEMANTIC_WEIGHT` | Float | `0.7` | Balance between semantic similarity (0.7) and decayed importance (0.3) in recall ranking. |
 | `EXTRACT_COMPLEX_CONCEPTS` | `true`, `false` | `true` | Enable extraction of modifier+noun phrases (e.g., "optimized WGSL"). Set to `false` to disable. |
 | `CONTEXT_TODO_LIMIT` | Integer | `3` | Max pending todos shown in `memory://current-context`. |
+| `EMBEDDING_CONCURRENCY` | Integer | `5` | Max concurrent embedding operations for `remember_facts`. Higher values = faster batch processing but more CPU/memory usage. |
+| `EXTENSIONS_PATH` | Path to directory | (none) | Optional path to load custom tool extensions from external directory. Allows adding private/experimental tools without modifying the codebase. |
 
 ## Quick Start Configuration (Standard)
 
@@ -76,8 +90,7 @@ Add this to your `mcp_config.json`:
       "command": "node",
       "args": ["/path/to/mcp-local-memory/dist/index.js"],
       "env": {
-        "ARCHIVIST_STRATEGY": "nlp",
-        "USE_WORKER": "true"
+        "ARCHIVIST_STRATEGY": "nlp"
       }
     }
   }
@@ -112,6 +125,73 @@ You can combine multiple strategies by separating them with a comma (e.g. `nlp,l
 -   **`llm`**: **(Ollama / Artificial Intelligence)** Sends text to a local LLM (e.g., Llama 3) for deep understanding, relation extraction, and importance scoring. Requires running Ollama.
 
 ---
+
+## ⚡ Performance Optimizations
+
+### Asynchronous Memory Operations
+**All memory saving operations are now non-blocking** for instant responses:
+
+- **`remember_fact`**: Returns immediately, processes embedding + archivist in background
+  - **Before**: ~50-200ms blocking wait
+  - **After**: Instant return (0ms)
+  
+- **`remember_facts`**: Parallel batch processing with concurrency limiting
+  - **Before**: 7 facts × 200ms = ~1.4s (sequential)
+  - **After**: ~200ms (parallel batches)
+  - **Speedup**: ~7x faster
+  - **Configuration**: Set `EMBEDDING_CONCURRENCY` env var (default: 5)
+
+### Natural Memory Evolution
+Memories accessed frequently gain importance automatically:
+- **Each `recall()`**: +0.05 importance boost (capped at 1.0)
+- **Fresh memories**: Start at 0.5 importance
+- **After ~10 accesses**: Become "cherished" (>0.7 importance)
+- **After ~20 accesses**: Maximum importance (1.0)
+
+This mimics **hippocampus consolidation** - frequently-used memories naturally rise to the top. No manual curation needed.
+
+## Extensions System
+
+The server supports a dynamic extension system that allows loading custom tools from external directories without modifying the core codebase. This is particularly useful for private tools or experimental features.
+
+To enable extensions:
+1.  Create a directory for your extensions.
+2.  Set the `EXTENSIONS_PATH` environment variable to that directory's absolute path.
+3.  Each extension should be a `.ts` or `.js` file exporting a `handler` function and a `tool` definition.
+
+**Setup:**
+1. Create a directory for your extensions (e.g., `./my-extensions/`)
+2. Add TypeScript/JavaScript modules with your custom tools
+3. Set `EXTENSIONS_PATH` environment variable to your directory
+4. Restart the server
+
+**Extension Format:**
+```typescript
+// my-extensions/my_tool.ts
+import type { Database } from 'better-sqlite3';
+
+export function handleMyTool(db: Database, args?: any) {
+    // Your tool logic here
+    return { result: "Custom tool output" };
+}
+
+export const MY_TOOL_TOOL = {
+    name: "my_tool",
+    description: "Description of what your tool does",
+    inputSchema: {
+        type: "object",
+        properties: {
+            // Define input parameters
+        }
+    }
+};
+```
+
+**Benefits:**
+- Keep experimental/private tools separate from the main codebase
+- No need to rebuild or modify source code  
+- Easy to version control your extensions independently
+- Perfect for personal customizations
 
 
 ---
