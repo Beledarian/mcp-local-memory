@@ -21,7 +21,7 @@ A lightweight, privacy-first, "Zero-Docker" memory server for AI agents. This se
 
 A core advantage of this server is its ability to serve as a **centralized long-term memory pool** for all your AI workflows. 
 
-Unlike standard agent memories that are ephemeral or locked to a single session, this server allows multiple MCP-enabled agents (e.g., Claude Desktop, IDE extensions, or custom CLIs) to:
+Unlike standard agent memories that are ephemeral or locked to a single session, this server allows multiple MCP-enabled agents (e.g., Claude Code, IDE extensions, or custom CLIs) to:
 - **Share Knowledge**: Information learned by one agent is instantly accessible to another.
 - **Maintain Consistency**: Ensure all your AI tools operate from the same established facts and entity history.
 - **Persistent Intelligence**: Your interaction history matures over time into a robust, structured knowledge base available across your entire local ecosystem.
