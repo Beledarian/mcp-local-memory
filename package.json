@@ -3,6 +3,7 @@
   "version": "1.0.4",
   "description": "Local memory server for AI agents using SQLite and MCP",
   "main": "dist/index.js",
+  "module": "./src/index.ts",
   "bin": {
     "mcp-local-memory": "./dist/index.js",
     "memory": "./dist/index.js"
