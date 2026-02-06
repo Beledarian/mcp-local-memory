@@ -46,16 +46,25 @@ Unlike standard agent memories that are ephemeral or locked to a single session,
 
 ## 📦 Installation & Setup
 
-### Method 1: Use via NPX (Recommended)
+### Method 1: Use via Smithery (Recommended for Discovery)
 
-You can use the server directly without installing it globally, using `npx`. This is the easiest way to use it with MCP clients like Claude Desktop.
+This server is available on [Smithery](https://smithery.ai/server/@beledarian/mcp-local-memory).
+
+**Install via Smithery CLI:**
+```bash
+npx -y @smithery/cli install @beledarian/mcp-local-memory --config $YOUR_MCP_CONFIG_PATH
+```
+
+### Method 2: Use via NPX (Direct)
+
+You can use the server directly using `npx`. This is the easiest way for manual configuration.
 
 **Add to your MCP Configuration:**
 
 ```json
 {
   "mcpServers": {
-    "local-memory": {
+    "memory": {
       "command": "npx",
       "args": ["-y", "@beledarian/mcp-local-memory"],
       "env": {
@@ -66,12 +75,16 @@ You can use the server directly without installing it globally, using `npx`. Thi
 }
 ```
 
-### Method 2: Install via NPM
+### Method 3: Install via NPM
 
-If you prefer a global installation:
+Global installation provides the `memory` command:
 
 ```bash
 npm install -g @beledarian/mcp-local-memory
+
+# Usage
+memory --help
+```
 ```
 
 ### Method 3: Install from Source (For Contributors)
