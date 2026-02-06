@@ -1,6 +1,6 @@
 {
-  "name": "memory",
-  "version": "1.0.4",
+  "name": "mcp-local-memory",
+  "version": "1.0.5",
   "description": "Local memory for AI agents using SQLite and MCP. Remembers facts, entities, and relations across sessions.",
   "mcpServers": {
     "memory": {

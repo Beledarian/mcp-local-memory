@@ -1,6 +1,6 @@
 {
   "name": "@beledarian/mcp-local-memory",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Local memory server for AI agents using SQLite and MCP",
   "main": "dist/index.js",
   "bin": {
