@@ -348,14 +348,14 @@ export class NlpArchivist implements Archivist {
              const cleanVerb = verb.replace(' by', ''); 
 
              if (isPassive) {
-                 // Passive: "Python (0) is used by Laurin (1)". Source = Laurin (last), Target = Python (others)
+                 // Passive: "Python (0) is used by Alice (1)". Source = Alice (last), Target = Python (others)
                  // Passive: "A (0) and B (1) are used by C (2)". Source = C, Targets = A, B
                  const source = sentEntities[sentEntities.length - 1].name;
                  for (let i = 0; i < sentEntities.length - 1; i++) {
                      relations.push({ source, target: sentEntities[i].name, relation: cleanVerb });
                  }
              } else {
-                 // Active: "Laurin (0) uses A (1) and B (2)". Source = Laurin, Targets = A, B
+                 // Active: "Alice (0) uses A (1) and B (2)". Source = Alice, Targets = A, B
                  const source = sentEntities[0].name;
                  for (let i = 1; i < sentEntities.length; i++) {
                      relations.push({ source, target: sentEntities[i].name, relation: cleanVerb });

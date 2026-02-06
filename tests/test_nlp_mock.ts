@@ -2,10 +2,10 @@
 import nlp from 'compromise';
 
 const sentences = [
-    "Laurin uses Python.",
-    "Python is used by Laurin.",
+    "Alice uses Python.",
+    "Python is used by Alice.",
     "Project X uses Library Y.",
-    "Laurin loves Coffee.",
+    "Alice loves Coffee.",
     "The server runs on Linux." // Passive-ish or Prepositional
 ];
 

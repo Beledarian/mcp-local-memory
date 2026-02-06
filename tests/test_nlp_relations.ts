@@ -35,8 +35,8 @@ async function testSentence(text: string, expectedSource: string, expectedTarget
 }
 
 async function run() {
-    await testSentence("Laurin uses Python.", "Laurin", "Python", "uses");
-    await testSentence("Python is used by Laurin.", "Laurin", "Python", "uses");
+    await testSentence("Alice uses Python.", "Alice", "Python", "uses");
+    await testSentence("Python is used by Alice.", "Alice", "Python", "uses");
     await testSentence("The server runs on Linux.", "The server", "Linux", "runs_on");
     await testSentence("Project X requires generic verbs.", "Project X", "generic verbs", "requires"); // Testing non-restricted verb
     console.log("Done.");

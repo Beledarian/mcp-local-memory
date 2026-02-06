@@ -49,7 +49,7 @@ const extensions = loadExtensions(EXTENSIONS_PATH);
 
 // Initialize DB
 const db = getDb();
-try { fs.writeFileSync('/tmp/mcp_db_path.txt', RESOLVED_DB_PATH); } catch(e) {}
+
 console.error(`[Server] Database initialized at: ${RESOLVED_DB_PATH}`);
 
 // Initialize Extensions (Startup Hooks)
