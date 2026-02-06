@@ -1,9 +1,5 @@
 # Local Memory MCP Server 🧠
 
-> [!IMPORTANT]
-> **Windows Users**: You **MUST** have C++ Build Tools installed to use this package (projects using `better-sqlite3` require native compilation).
-> Run: `npm install --global --production windows-build-tools` OR install "Desktop development with C++" via Visual Studio Installer.
-
 A lightweight, privacy-first, "Zero-Docker" memory server for AI agents. This server provides semantic search, keyword search, and a knowledge graph—all running natively on your local machine.
 
 ![Antigravity Agent Demo](docs/image.png)
@@ -41,10 +37,10 @@ Unlike standard agent memories that are ephemeral or locked to a single session,
 -   **Build Tools**: Python and C++ build tools (required by `better-sqlite3` native compilation).
 
 > [!IMPORTANT]
-> **Windows Users**: You MUST have C++ Build Tools installed.
+> **Windows Users**: You may need to have C++ Build Tools installed.
 > Run: `npm install --global --production windows-build-tools` 
 > OR install "Desktop development with C++" via Visual Studio Installer.
-> *Failure to do this will result in `gyp` errors during installation.*
+> *Failure to do this can result in `gyp` errors during installation.*
 
 ## 📦 Installation & Setup
 
