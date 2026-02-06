@@ -6,6 +6,8 @@
 
 A lightweight, privacy-first, "Zero-Docker" memory server for AI agents. This server provides semantic search, keyword search, and a knowledge graph—all running natively on your local machine.
 
+![Antigravity Agent Demo](docs/image.png)
+
 ## Key Features
 
 -   **Hybrid Search**: Semantic (Vector) search + Keyword (FTS5) search.
