@@ -4,7 +4,7 @@ Brief example instructions for agents working with the mcp-local-memory server.
 
 ## Quick Start
 
-**FOR COMPLEX WORK**: Call `init_conversation(name)` which automatically provides full startup context.
+**FOR COMPLEX WORK**: Call `init_conversation(name)` -> Then `read_resource("memory://current-context")` to load full context.
 
 **FOR ONGOING TURNS**: Read `memory://current-context` before other operations.
 

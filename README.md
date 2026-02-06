@@ -172,14 +172,18 @@ Memories accessed frequently gain importance automatically:
 
 This mimics **hippocampus consolidation** - frequently-used memories naturally rise to the top. No manual curation needed.
 
-## Extensions System
+### Official Extensions
 
-The server supports a dynamic extension system that allows loading custom tools from external directories without modifying the core codebase. This is particularly useful for private tools or experimental features.
+This package includes first-party extensions to enhance memory management:
 
-To enable extensions:
-1.  Create a directory for your extensions.
-2.  Set the `EXTENSIONS_PATH` environment variable to that directory's absolute path.
-3.  Each extension should be a `.ts` or `.js` file exporting a `handler` function and a `tool` definition.
+1.  **Soul Maintenance** (`extensions/soul_maintenance.ts`): Implements a "biological" lifecycle where memories must earn importance through use and naturally decay over time unless immunized by core tags.
+
+To use these official extensions, set your `EXTENSIONS_PATH` to the `extensions` folder inside the installed package:
+
+```bash
+# Example for npx usage
+EXTENSIONS_PATH=./node_modules/@beledarian/mcp-local-memory/extensions
+```
 
 **Setup:**
 1. Create a directory for your extensions (e.g., `./my-extensions/`)
@@ -263,10 +267,7 @@ The server exposes the following MCP tools:
 -   **`list_todos(status?, limit?)`**: View pending or completed tasks.
 
 #### Conversation & Task Management
--   **`init_conversation(name?)`**: Initialize a conversation session. Returns `conversation_id` **+ automatic startup context** including:
-    - User info (top entity), recent 5 memories, important relations
-    - Active tasks (global + conversation-specific, up to 10)
-    - Pending todos (up to 5)
+-   **`init_conversation(name?)`**: Initialize a conversation session. Returns `conversation_id`. **MUST follow up with `read_resource("memory://current-context")`** to get startup context (user info, recent memories, active tasks).
 -   **`add_task(content, section?, conversation_id?)`**: Add a task to a specific conversation or global scope (if `conversation_id` omitted).
 -   **`update_task_status(id, status)`**: Update task status to `pending`, `in-progress`, or `complete`.
 -   **`list_tasks(conversation_id?, status?)`**: List tasks. Use `__all__` to show all tasks or omit to show global tasks only.

@@ -265,7 +265,7 @@ export const CONSOLIDATE_CONTEXT_TOOL: any = {
 
 export const INIT_CONVERSATION_TOOL: any = {
   name: "init_conversation",
-  description: "Initialize a new conversation session with a unique ID. This allows for conversation-scoped task lists. Call this at the start of a conversation to generate a conversation ID.",
+  description: "Initialize a new conversation session with a unique ID. This allows for conversation-scoped task lists. Call this at the start of a conversation to generate a conversation ID. The returned payload is minimal; you MUST subsequent call 'read_resource(memory://current-context)' to get the full context.",
   inputSchema: {
     type: "object",
     properties: {

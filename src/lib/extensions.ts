@@ -19,6 +19,7 @@ export interface Extension {
         description: string;
         inputSchema: any;
     };
+    init?: (db: Database) => void | Promise<void>;
 }
 
 export function loadExtensions(extensionsPath?: string): Extension[] {
@@ -51,12 +52,20 @@ export function loadExtensions(extensionsPath?: string): Extension[] {
                     // Auto-detect handler and tool definition
                     const handlerKey = Object.keys(module).find(k => k.startsWith('handle'));
                     const toolKey = Object.keys(module).find(k => k.endsWith('_TOOL') || k.endsWith('Tool'));
+                    const initKey = Object.keys(module).find(k => k === 'init');
                     
                     if (handlerKey && toolKey) {
-                        extensions.push({
+                        const extension: Extension = {
                             handler: module[handlerKey],
                             tool: module[toolKey]
-                        });
+                        };
+
+                        if (initKey && typeof module[initKey] === 'function') {
+                            extension.init = module[initKey];
+                            console.log(`[Extensions] Found init hook for: ${module[toolKey].name}`);
+                        }
+
+                        extensions.push(extension);
                         console.log(`[Extensions] Loaded: ${module[toolKey].name}`);
                     }
                 }

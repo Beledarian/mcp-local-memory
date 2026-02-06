@@ -1,3 +1,4 @@
+
 // Tool handlers for conversation and task management
 import { randomUUID } from 'crypto';
 import { Database } from 'better-sqlite3';
@@ -11,96 +12,10 @@ export function handleInitConversation(db: Database, args: { name?: string }) {
         VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `).run(id, name);
     
-    // Gather startup context
-    const context: any = {};
-    
-    // 1. User Info: Find entity representing the user (type='User' or 'Person')
-    const userEntity = db.prepare(`
-        SELECT name, type FROM entities 
-        WHERE type IN ('User', 'Person') 
-        ORDER BY importance DESC LIMIT 1
-    `).get() as any;
-    
-    if (userEntity) {
-        const observations = db.prepare(`
-            SELECT content FROM entity_observations 
-            WHERE entity_id = (SELECT id FROM entities WHERE name = ? LIMIT 1)
-            ORDER BY created_at DESC LIMIT 5
-        `).all(userEntity.name) as any[];
-        
-        context.user_info = {
-            name: userEntity.name,
-            type: userEntity.type,
-            observations: observations.map(o => o.content)
-        };
-    } else {
-        context.user_info = null;
-    }
-    
-    // 1b. Agent Info: Find entity representing the agent (type='AI Agent' or name in ['Antigravity', 'I'])
-    const agentEntity = db.prepare(`
-        SELECT name, type FROM entities 
-        WHERE type = 'AI Agent' OR name = 'I'
-        ORDER BY importance DESC
-        LIMIT 1
-    `).get() as any;
-    
-    if (agentEntity) {
-        const observations = db.prepare(`
-            SELECT content FROM entity_observations 
-            WHERE entity_id = (SELECT id FROM entities WHERE name = ? LIMIT 1)
-            ORDER BY created_at DESC LIMIT 5
-        `).all(agentEntity.name) as any[];
-        
-        // Get prominent relations from/to the agent
-        const agentRelations = db.prepare(`
-            SELECT source, relation, target FROM relations
-            WHERE source = ? OR target = ?
-            LIMIT 5
-        `).all(agentEntity.name, agentEntity.name);
-        
-        context.agent_info = {
-            name: agentEntity.name,
-            type: agentEntity.type,
-            observations: observations.map(o => o.content),
-            relations: agentRelations
-        };
-    } else {
-        context.agent_info = null;
-    }
-    
-    // 2. Recent Memories: Last 5 memories
-    context.recent_memories = db.prepare(`
-        SELECT content, created_at FROM memories 
-        ORDER BY created_at DESC LIMIT 5
-    `).all();
-    
-    // 3. Important Relations: Top 5 user-related relations
-    context.important_relations = db.prepare(`
-        SELECT source, relation, target FROM relations
-        WHERE source = ? OR target = ?
-        LIMIT 5
-    `).all(userEntity?.name || '', userEntity?.name || '');
-    
-    // 4. Active Tasks: Global and conversation tasks
-    context.active_tasks = db.prepare(`
-        SELECT id, content, status, section FROM tasks
-        WHERE status != 'complete'
-        ORDER BY created_at DESC LIMIT 10
-    `).all();
-    
-    // 5. Pending Todos
-    context.pending_todos = db.prepare(`
-        SELECT id, content, due_date FROM todos
-        WHERE status = 'pending'
-        ORDER BY created_at DESC LIMIT 5
-    `).all();
-    
     return {
         conversation_id: id,
         name: name,
-        message: `Conversation initialized with ID: ${id}`,
-        context: context
+        message: `Conversation initialized with ID: ${id}. Content has been offloaded to 'read_resource("memory://current-context")' to prevent output truncation.`
     };
 }
 
@@ -221,4 +136,50 @@ export function handleDeleteTask(db: Database, args: { id: string }) {
     };
 }
 
+// --- Todo Handlers ---
 
+export function handleAddTodo(db: Database, args: { content: string; due_date?: string }) {
+    const { content, due_date } = args;
+    const id = randomUUID();
+    
+    db.prepare("INSERT INTO todos (id, content, due_date) VALUES (?, ?, ?)").run(id, content, due_date || null);
+    
+    return {
+        content: [{ type: "text", text: `Todo added (ID: ${id})` }]
+    };
+}
+
+export function handleCompleteTodo(db: Database, args: { id: string }) {
+    const { id } = args;
+    const todo = db.prepare("SELECT * FROM todos WHERE id = ?").get(id) as any;
+    
+    if (!todo) {
+        // Return error object compatible with partial result or throw
+        throw new Error(`Todo '${id}' not found.`);
+    }
+    
+    // 1. Mark as completed
+    db.prepare("UPDATE todos SET status = 'completed' WHERE id = ?").run(id);
+    
+    // 2. Convert to memory
+    const memId = randomUUID();
+    const memContent = `Completed task: ${todo.content}`;
+    db.prepare("INSERT INTO memories (id, content, tags) VALUES (?, ?, ?)").run(memId, memContent, JSON.stringify(["task", "completion"]));
+    
+    return {
+        content: [{ type: "text", text: `Todo completed and saved to memory.` }]
+    };
+}
+
+export function handleListTodos(db: Database, args: { status?: string; limit?: number }) {
+    const status = args.status || 'pending';
+    const limit = args.limit || 20;
+    
+    const todos = db.prepare("SELECT * FROM todos WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(status, limit) as any[];
+    
+    const list = todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content} (ID: ${t.id})`).join('\\n');
+    
+    return {
+        content: [{ type: "text", text: list || "No todos found." }]
+    };
+}

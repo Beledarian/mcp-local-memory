@@ -41,6 +41,7 @@ import {
 import { getArchivist } from "./lib/archivist.js";
 import * as taskHandlers from './tools/task_handlers.js';
 import { loadExtensions } from "./lib/extensions.js";
+import * as core from './tools/core.js';
 
 // Load extensions
 const EXTENSIONS_PATH = process.env.EXTENSIONS_PATH;
@@ -50,6 +51,21 @@ const extensions = loadExtensions(EXTENSIONS_PATH);
 const db = getDb();
 try { fs.writeFileSync('/tmp/mcp_db_path.txt', RESOLVED_DB_PATH); } catch(e) {}
 console.error(`[Server] Database initialized at: ${RESOLVED_DB_PATH}`);
+
+// Initialize Extensions (Startup Hooks)
+(async () => {
+    for (const ext of extensions) {
+        if (ext.init) {
+            try {
+                console.log(`[Server] Running init hook for ${ext.tool.name}...`);
+                await ext.init(db);
+                console.log(`[Server] Init hook complete for ${ext.tool.name}`);
+            } catch (err: any) {
+                console.error(`[Server] Init hook failed for ${ext.tool.name}:`, err.message);
+            }
+        }
+    }
+})();
 
 // Register Custom Functions
 // Leventshtein distance for fuzzy matching
@@ -244,6 +260,52 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
             context += "\n";
         }
         
+        // --- ENTITY CONTEXT (User & Agent) ---
+        // 1. User Info: Find entity representing the user (type='User' or 'Person')
+        const userEntity = db.prepare(`
+            SELECT name, type FROM entities 
+            WHERE type IN ('User', 'Person') 
+            ORDER BY importance DESC LIMIT 1
+        `).get() as any;
+        
+        if (userEntity) {
+            context += `=== USER INFO ===\nName: ${userEntity.name} (${userEntity.type})\n`;
+            const observations = db.prepare(`
+                SELECT content FROM entity_observations 
+                WHERE entity_id = (SELECT id FROM entities WHERE name = ? LIMIT 1)
+                ORDER BY created_at DESC LIMIT 5
+            `).all(userEntity.name) as any[];
+            
+            if (observations.length > 0) {
+                 context += "Observations:\n";
+                 observations.forEach((obs: any) => context += `- ${obs.content}\n`);
+            }
+            context += "\n";
+        }
+        
+        // 1b. Agent Info: Find entity representing the agent (type='AI Agent' or name in ['Antigravity', 'I'])
+        const agentEntity = db.prepare(`
+            SELECT name, type FROM entities 
+            WHERE type = 'AI Agent' OR name = 'I'
+            ORDER BY importance DESC
+            LIMIT 1
+        `).get() as any;
+        
+        if (agentEntity) {
+            context += `=== AGENT INFO ===\nName: ${agentEntity.name} (${agentEntity.type})\n`;
+             const observations = db.prepare(`
+                SELECT content FROM entity_observations 
+                WHERE entity_id = (SELECT id FROM entities WHERE name = ? LIMIT 1)
+                ORDER BY created_at DESC LIMIT 5
+            `).all(agentEntity.name) as any[];
+            
+             if (observations.length > 0) {
+                 context += "Observations:\n";
+                 observations.forEach((obs: any) => context += `- ${obs.content}\n`);
+            }
+             context += "\n";
+        }
+
         // === PROMINENT RELATIONS ===
         const topRelations = db.prepare(`
             SELECT source, relation, target, COUNT(*) as freq
@@ -495,6 +557,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     DELETE_RELATION_TOOL,
     DELETE_ENTITY_TOOL,
     UPDATE_ENTITY_TOOL,
+    {
+      name: "cli",
+      description: "Single entry point for all tools using a simplified command-line syntax. Saves tokens by replacing strict JSON schemas. commands: remember, recall, graph, todo, task, entity...",
+      inputSchema: {
+          type: "object",
+          properties: {
+              command: { type: "string", description: "The command string to execute." }
+          },
+          required: ["command"]
+      }
+    }
   ];
 
   // Add extensions
@@ -516,479 +589,44 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
+      case "cli": {
+        const { handleCLI } = await import('./tools/cli.js');
+        return handleCLI(db, embedder, archivist, args?.command as string, extensions);
+      }
+
       case "remember_fact": {
-        const text = args?.text as string;
-        const tags = (args?.tags as string[]) || [];
-        const id = uuidv4();
-        
-        // 1. Insert text into DB immediately (FAST)
-        const insertTx = db.transaction(() => {
-            db.prepare(
-                `INSERT INTO memories (id, content, tags, last_accessed, importance) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0.5)`
-            ).run(id, text, JSON.stringify(tags));
-        });
-        insertTx();
-
-        // 2. Background Processing (ASYNC - Don't wait)
-        (async () => {
-            try {
-                // Get embedding
-                const embedding = await embedder.embed(text);
-                const float32Embedding = new Float32Array(embedding);
-
-                // Insert embedding
-                db.prepare(
-                    `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
-                ).run(id, Buffer.from(float32Embedding.buffer));
-                
-                // Trigger Archivist
-                await archivist.process(text, id);
-            } catch (err) {
-                console.error(`Error processing background task for fact ${id}:`, err);
-           }
-        })();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Remembered fact with ID: ${id}`,
-            },
-          ],
-        };
+        return await core.handleRememberFact(db, embedder, archivist, args);
       }
 
       case "remember_facts": {
-        const facts = (args?.facts as any[]) || [];
-        const results = [];
-
-        // Transactionally insert all text first (Fast)
-        const insertTx = db.transaction(() => {
-            for (const f of facts) {
-                const id = uuidv4();
-                f.id = id; // Store for post-processing
-                db.prepare(
-                    `INSERT INTO memories (id, content, tags, last_accessed, importance) VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0.5)`
-                ).run(id, f.text, JSON.stringify(f.tags || []));
-            }
-        });
-        insertTx();
-
-        // Background Processing (PARALLEL with concurrency limit)
-        const EMBEDDING_CONCURRENCY = parseInt(process.env.EMBEDDING_CONCURRENCY || '5');
-        
-        (async () => {
-            // Process in batches to limit concurrency
-            for (let i = 0; i < facts.length; i += EMBEDDING_CONCURRENCY) {
-                const batch = facts.slice(i, i + EMBEDDING_CONCURRENCY);
-                await Promise.all(batch.map(async (f) => {
-                    try {
-                        // 1. Embedding (concurrent within batch)
-                        const embedding = await embedder.embed(f.text);
-                        const float32Embedding = new Float32Array(embedding);
-                        db.prepare(
-                            `INSERT INTO vec_items (rowid, embedding) VALUES ((SELECT rowid FROM memories WHERE id = ?), ?)`
-                        ).run(f.id, Buffer.from(float32Embedding.buffer));
-                        
-                        // 2. Archivist (concurrent within batch)
-                        await archivist.process(f.text, f.id);
-                    } catch (e) {
-                        console.error(`Error processing background task for fact ${f.id}:`, e);
-                    }
-                }));
-            }
-        })();
-
-        return {
-            content: [{ type: "text", text: `Queued ${facts.length} facts for memory.` }]
-        };
+        return await core.handleRememberFacts(db, embedder, archivist, args);
       }
 
       case "recall": {
-        const query = args?.query as string;
-        const limit = (args?.limit as number) || 5;
-        const returnJson = (args?.json as boolean) || false;
-        const showDebug = (args?.debug as boolean) || false;
-        
-        let startDate: Date | null = args?.startDate ? new Date(args.startDate as string) : null;
-        let endDate: Date | null = args?.endDate ? new Date(args.endDate as string) : null;
-
-        let debugSteps = [];
-        let semanticQuery = query;
-
-        // 0. Time Tunnel Parsing (Chrono)
-        try {
-            if (!startDate && !endDate) {
-                const parsed = chrono.parse(query, new Date(), { forwardDate: false });
-                if (parsed.length > 0) {
-                    const result = parsed[0];
-                    if (result.start) {
-                        startDate = result.start.date();
-                        debugSteps.push(`Time Tunnel: Parsed start date: ${startDate.toISOString()}`);
-                    }
-                    if (result.end) {
-                        endDate = result.end.date();
-                        debugSteps.push(`Time Tunnel: Parsed end date: ${endDate.toISOString()}`);
-                    } else if (startDate) {
-                        // If "last week", usually implies a range up to now or end of that period
-                        // chrono usually handles "last week" as a specific point or range. 
-                        // If no end is explicit, we might want to default to NOW for "since" logic
-                        // But let's verify what chrono gives. 
-                        // For "last week", chrono gives a specific date. 
-                        // If the user says "since last week", start is set.
-                        // Let's default endDate to NOW if we have a start date but no end date, assuming a "filter from X" intent?
-                        // Actually, strict filtering is safer. Let's start with just what chrono finds.
-                    }
-                    
-                    // Remove the time phrase from the query to improve embedding quality
-                    // e.g. "What did I do yesterday" -> "What did I do"
-                    if (startDate || endDate) {
-                         // escape special regex chars? chrono result.text is usually safe text
-                         semanticQuery = query.replace(result.text, "").trim();
-                         // Cleanup extra spaces or punctuation left behind
-                         semanticQuery = semanticQuery.replace(/\s+/, " ").trim();
-                         debugSteps.push(`Time Tunnel: Cleaned query: "${semanticQuery}"`);
-                    }
-                }
-            }
-        } catch (err) {
-            console.warn("Chrono parsing failed", err);
-        }
-
-        try {
-            // 1. Get query embedding
-            // 1. Get query embedding
-            debugSteps.push(`Embedding query: "${semanticQuery}"...`);
-            const embedding = await embedder.embed(semanticQuery);
-            const float32Embedding = new Float32Array(embedding);
-
-            // 2. Search
-            let results: any[] = [];
-            let usedSearchMethod = "vector";
-
-            try {
-                debugSteps.push("Attempting vector search...");
-                // Attempt vector search
-                // Dynamic WHERE clause
-                let whereClause = "WHERE 1=1";
-                const params: any[] = [Buffer.from(float32Embedding.buffer), Buffer.from(float32Embedding.buffer)];
-
-                if (startDate) {
-                    whereClause += " AND m.created_at >= ?";
-                    params.push(startDate.toISOString());
-                }
-                if (endDate) {
-                    whereClause += " AND m.created_at <= ?";
-                    params.push(endDate.toISOString());
-                }
-
-                params.push(limit * 2);
-
-                results = db
-                .prepare(
-                    `
-                    SELECT 
-                    m.id, 
-                    m.content,
-                    m.tags,
-                    m.created_at,
-                    m.importance,
-                    m.last_accessed,
-                    m.access_count,
-                    vec_distance_cosine(v.embedding, ?) as distance,
-                    ranked_score(m.importance, m.last_accessed, m.access_count, vec_distance_cosine(v.embedding, ?)) as score
-                    FROM vec_items v
-                    JOIN memories m ON v.rowid = m.rowid
-                    ${whereClause}
-                    ORDER BY score DESC
-                    LIMIT ?
-                    `
-                )
-                .all(...params) as any[];
-                debugSteps.push(`Vector search success. Got ${results.length} results.`);
-            } catch (err: any) {
-                const msg = `Vector search failed: ${err.message}`;
-                console.warn(msg);
-                debugSteps.push(msg);
-                usedSearchMethod = "fts-fallback";
-            }
-
-            // 3. Fallback/Hybrid using FTS
-            if (results.length === 0 || usedSearchMethod === "fts-fallback") {
-                debugSteps.push("Entering FTS fallback...");
-                try {
-                    const tokenizeFTSQuery = (q: string): string => {
-                        const tokens = q.replace(/[^\w\s]/g, ' ').split(/\s+/).filter(t => t.length > 0).map(t => `"${t}"`);
-                        return tokens.length > 0 ? tokens.join(' OR ') : q;
-                    };
-                    
-                    let ftsWhere = "WHERE memories_fts MATCH ?";
-                    const ftsParams: any[] = [tokenizeFTSQuery(query)];
-
-                    if (startDate) {
-                        ftsWhere += " AND memories.created_at >= ?";
-                        ftsParams.push(startDate.toISOString());
-                    }
-                    if (endDate) {
-                        ftsWhere += " AND memories.created_at <= ?";
-                        ftsParams.push(endDate.toISOString());
-                    }
-                    ftsParams.push(limit);
-                    
-                    const ftsResults = db.prepare(`
-                        SELECT 
-                            id, 
-                            memories.content,
-                            memories.tags,
-                            memories.importance,
-                            created_at,
-                            rank as score
-                        FROM memories_fts 
-                        JOIN memories ON memories_fts.rowid = memories.rowid
-                        ${ftsWhere} 
-                        ORDER BY rank
-                        LIMIT ?
-                    `).all(...ftsParams) as any[];
-                    
-                    results = ftsResults;
-                    usedSearchMethod = (usedSearchMethod === "vector") ? "fts-hybrid" : "fts-only";
-                    debugSteps.push(`FTS search success. Got ${results.length} results.`);
-                } catch (ftsErr: any) {
-                    const msg = `FTS search failed: ${ftsErr.message}`;
-                    console.error(msg);
-                    debugSteps.push(msg);
-                    // If both fail, throwing here will be caught by outer catch
-                    throw new Error(`Both Vector and FTS search failed. Debug: ${debugSteps.join(' -> ')}`);
-                }
-            }
-
-            // Post-process boosting
-            debugSteps.push("Post-processing...");
-            const tagBoost = parseFloat(process.env.TAG_MATCH_BOOST || '0.15');
-            const queryLower = query.toLowerCase();
-            results = results.map(r => {
-                try {
-                    const tags = JSON.parse(r.tags || '[]') as string[];
-                    const hasExactMatch = tags.some(tag => queryLower.includes(tag.toLowerCase()));
-                    return { ...r, score: (r.score || 0) + (hasExactMatch ? tagBoost : 0) };
-                } catch { return r; }
-            }).sort((a, b) => b.score - a.score).slice(0, limit);
-
-            // Update Access Stats
-            if (results.length > 0) {
-                try {
-                    debugSteps.push("Updating access stats...");
-                    const ids = results.map(r => r.id);
-                    const ph = ids.map(() => '?').join(',');
-                    
-                    // Update access count first
-                    db.prepare(`
-                        UPDATE memories 
-                        SET last_accessed = CURRENT_TIMESTAMP, 
-                            access_count = access_count + 1
-                        WHERE id IN (${ph})
-                    `).run(...ids);
-                    
-                    // Then calculate logarithmic importance based on new access_count
-                    // Formula: importance = 0.5 + 0.5 * (ln(access_count + 1) / ln(21))
-                    // This gives: 1 access → 0.73, 5 → 0.92, 10 → 0.97, 20 → 1.0
-                    db.prepare(`
-                        UPDATE memories
-                        SET importance = 0.5 + 0.5 * (log(access_count + 1) / log(21))
-                        WHERE id IN (${ph})
-                    `).run(...ids);
-                    
-                    debugSteps.push("Access stats updated.");
-                } catch (updateErr: any) {
-                    console.warn("Failed to update access stats (non-critical):", updateErr.message);
-                    debugSteps.push(`Access stats update failed: ${updateErr.message}`);
-                }
-            }
-
-            if (returnJson) {
-            return { content: [{ type: "text", text: JSON.stringify({ method: usedSearchMethod, results, debug: debugSteps }, null, 2) }] };
-            }
-
-            const head = `Recall results for "${query}" (${usedSearchMethod}):\n`;
-            const body = results.map(r => {
-            const importanceChar = (r.importance || 0) >= 0.8 ? " ⭐" : "";
-            const tags = JSON.parse(r.tags || '[]');
-            const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
-            
-            // Calculate Time Ago
-            const created = new Date(r.created_at);
-            const now = new Date();
-            const diffTime = Math.abs(now.getTime() - created.getTime());
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-            const timeAgo = diffDays === 1 ? "1 day ago" : `${diffDays} days ago`;
-
-            return `[Score: ${(r.score || 0).toFixed(2)}${importanceChar} | ${timeAgo}] ${r.content}${tagStr}`;
-            }).join('\n');
-
-            if (showDebug && !returnJson) {
-                const debugHeader = `\n\n--- Debug Info ---\n${debugSteps.join('\n')}`;
-                return {
-                    content: [{ type: "text", text: head + (body || "No relevant memories found.") + debugHeader }],
-                };
-            }
-
-            return {
-            content: [{ type: "text", text: head + (body || "No relevant memories found.") }],
-            };
-
-        } catch (outerErr: any) {
-             // Catch all logic errors and return debug info
-             return {
-                isError: true,
-                content: [{ type: "text", text: `Critical Recall Error: ${outerErr.message}\nTrace: ${debugSteps.join(' -> ')}` }]
-             };
-        }
+        return await core.handleRecall(db, embedder, args);
       }
 
       case "forget": {
-        const memoryId = args?.memory_id as string;
-        
-        // Check if exists first
-        const existing = db.prepare('SELECT rowid FROM memories WHERE id = ?').get(memoryId) as { rowid: number } | undefined;
-        
-        if (!existing) {
-             return {
-                isError: true,
-                content: [{ type: "text", text: `Memory with ID ${memoryId} not found.` }]
-            };
-        }
-
-        const deleteTx = db.transaction(() => {
-            db.prepare('DELETE FROM vec_items WHERE rowid = ?').run(existing.rowid);
-            db.prepare('DELETE FROM memories WHERE id = ?').run(memoryId);
-        });
-
-        deleteTx();
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Forgot memory ${memoryId}`,
-            },
-          ],
-        };
+        return core.handleForget(db, args);
       }
 
       case "list_recent_memories": {
-        const limit = (args?.limit as number) || 10;
-        const returnJson = (args?.json as boolean) || false;
-        const results = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT ?').all(limit) as any[];
-        
-        if (returnJson) {
-            return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-        }
-
-        const head = `Most recent ${results.length} memories:\n`;
-        const body = results.map(r => {
-            const importanceChar = r.importance >= 0.8 ? " ⭐" : "";
-            const tags = JSON.parse(r.tags || '[]');
-            const tagStr = tags.length > 0 ? ` [Tags: ${tags.join(', ')}]` : '';
-            return `- [${new Date(r.created_at).toLocaleDateString()}${importanceChar}] ${r.content}${tagStr}`;
-        }).join('\n');
-
-        return {
-            content: [{ type: "text", text: head + (body || "No memories found.") }]
-        };
+        return core.handleListRecent(db, args);
       }
 
       case "export_memories": {
-          const exportPath = args?.path as string;
-          
-          const alldata = db.prepare('SELECT * FROM memories').all();
-          
-          await fs.outputJson(exportPath, alldata, { spaces: 2 });
-          
-          return {
-              content: [{ type: "text", text: `Successfully exported ${alldata.length} memories to ${exportPath}` }]
-          };
+          const { handleExportMemories } = await import('./tools/advanced_ops.js');
+          return await handleExportMemories(db, args);
       }
 
       case "create_entity": {
-        const name = args?.name as string;
-        const type = args?.type as string;
-        const observations = (args?.observations as string[]) || [];
-
-        // Check for existing entity via fuzzy match (Levenshtein <= 2)
-        let existing = db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(name) as any;
-        
-        let entityId = existing?.id;
-        let message = "";
-
-        if (existing) {
-             message = `Entity '${name}' already exists (as '${existing.name}').`;
-             if (observations.length > 0) {
-                 const insertObs = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
-                 const transaction = db.transaction((obsList) => {
-                     for (const obs of obsList) insertObs.run(existing.id, obs);
-                 });
-                 transaction(observations);
-                 message += ` Appended ${observations.length} new observations.`;
-             }
-        } else {
-             entityId = uuidv4();
-             db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(entityId, name, type, "[]");
-             
-             if (observations.length > 0) {
-                 const insertObs = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
-                 const transaction = db.transaction((obsList) => {
-                     for (const obs of obsList) insertObs.run(entityId, obs);
-                 });
-                 transaction(observations);
-             }
-             
-             // Generate Entity Embedding
-             embedder.embed(name + " " + type).then(vec => {
-                const float32 = new Float32Array(vec);
-                try {
-                    db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(entityId, Buffer.from(float32.buffer));
-                } catch (e) { console.warn("Entity embedding insert failed:", e); }
-             }).catch(e => console.error("Embedding generation failed:", e));
-
-             message = `Created entity '${name}' of type '${type}'.`;
-        }
-
-        return {
-            content: [{ type: "text", text: message }]
-        };
+        const { handleCreateEntity } = await import('./tools/graph_ops.js');
+        return handleCreateEntity(db, args, embedder);
       }
 
       case "create_relation": {
-        const source = args?.source as string;
-        const target = args?.target as string;
-        const relation = args?.relation as string;
-
-        // Auto-create simplified entities stub if they don't exist?
-        // For robustness, let's enforce ensuring they exist or auto-create them as "Unknown".
-        // Here we'll just try to insert and if FK fails, warn.
-        
-        // Actually, to make it "smart", let's ensure they exist.
-        const ensureEntity = (name: string) => {
-            try {
-                const id = uuidv4();
-                db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, "Unknown", "[]");
-            } catch (ignored) {} // Exists
-        };
-
-        ensureEntity(source);
-        ensureEntity(target);
-
-        try {
-            db.prepare(`INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(source, target, relation);
-            return {
-                content: [{ type: "text", text: `Created relation: ${source} --[${relation}]--> ${target}` }]
-            };
-        } catch (error: any) {
-            if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-                 return { content: [{ type: "text", text: `Relation already exists.` }] };
-            }
-            throw error;
-        }
+        const { handleCreateRelation } = await import('./tools/graph_ops.js');
+        return handleCreateRelation(db, args);
       }
 
       case "read_graph": {
@@ -997,131 +635,31 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case "cluster_memories": {
-        const k = (args?.k as number) || 5;
-        try {
-            const { MemoryClusterer } = await import('./lib/clustering.js');
-            const clusterer = new MemoryClusterer(db);
-            const clusters = await clusterer.cluster(k);
-            
-            return {
-                content: [
-                {
-                    type: "text",
-                    text: JSON.stringify({
-                        clusters: clusters
-                    }, null, 2),
-                },
-                ],
-            };
-        } catch (err: any) {
-            return {
-                content: [{ type: 'text', text: `Clustering failed: ${err.message}` }],
-                isError: true
-            };
-        }
+        const { handleClusterMemories } = await import('./tools/advanced_ops.js');
+        return await handleClusterMemories(db, args);
       }
 
       case "consolidate_context": {
-        const text = args?.text as string;
-        const strategy = (args?.strategy as string) || 'nlp';
-        const limit = (args?.limit as number) || 5;
-
-        try {
-          const { Consolidator } = await import('./lib/consolidator.js');
-          const consolidator = new Consolidator(db, async (text) => {
-            const vectors = await embedder.embed(text);
-            return Array.from(vectors);
-          });
-
-          const extracted = await consolidator.extract(text, strategy, limit);
-
-          return {
-            content: [{
-              type: "text",
-              text: `Extracted ${extracted.length} novel memories:\n\n` +
-                    extracted.map((m, i) => `${i+1}. ${m.text} (importance: ${m.importance}, tags: ${m.tags.join(', ')})`).join('\n') +
-                    `\n\nTo save a memory: remember_fact(text="...", tags=[...])`
-            }]
-          };
-        } catch (err: any) {
-          return {
-            content: [{ type: 'text', text: `Consolidation failed: ${err.message}` }],
-            isError: true
-          };
-        }
+        const { handleConsolidateContext } = await import('./tools/advanced_ops.js');
+        return await handleConsolidateContext(db, args, embedder);
       }
 
       case "delete_observation": {
-          const entityName = args?.entity_name as string;
-          const content = (args?.observations as string[]) || []; 
-          
-          const entity = db.prepare("SELECT id FROM entities WHERE name = ?").get(entityName) as any;
-          if (!entity) {
-               return { content: [{ type: "text", text: `Entity '${entityName}' not found.` }], isError: true };
-          }
-          
-          let deletedCount = 0;
-          const delStmt = db.prepare("DELETE FROM entity_observations WHERE entity_id = ? AND content = ?");
-          
-          const transaction = db.transaction((items) => {
-              for (const obs of items) {
-                  const res = delStmt.run(entity.id, obs);
-                  deletedCount += res.changes;
-              }
-          });
-          transaction(content);
-
-          return {
-              content: [{ type: "text", text: `Deleted ${deletedCount} observations from '${entityName}'.` }]
-          };
+        const { handleDeleteObservation } = await import('./tools/graph_ops.js');
+        return handleDeleteObservation(db, args);
       }
 
       case "add_todo": {
-          const content = args?.content as string;
-          const dueDate = args?.due_date as string | undefined;
-          const id = uuidv4();
-          
-          db.prepare("INSERT INTO todos (id, content, due_date) VALUES (?, ?, ?)").run(id, content, dueDate || null);
-          
-          return {
-              content: [{ type: "text", text: `Todo added (ID: ${id})` }]
-          };
+        return taskHandlers.handleAddTodo(db, args as any);
       }
 
       case "complete_todo": {
-          const id = args?.id as string;
-          const todo = db.prepare("SELECT * FROM todos WHERE id = ?").get(id) as any;
-          
-          if (!todo) {
-              return { content: [{ type: "text", text: `Todo '${id}' not found.` }], isError: true };
-          }
-          
-          // 1. Mark as completed
-          db.prepare("UPDATE todos SET status = 'completed' WHERE id = ?").run(id);
-          
-          // 2. Convert to memory
-          const memId = uuidv4();
-          const memContent = `Completed task: ${todo.content}`;
-          db.prepare("INSERT INTO memories (id, content, tags) VALUES (?, ?, ?)").run(memId, memContent, JSON.stringify(["task", "completion"]));
-          
-          return {
-              content: [{ type: "text", text: `Todo completed and saved to memory.` }]
-          };
+        return taskHandlers.handleCompleteTodo(db, args as any);
       }
 
       case "list_todos": {
-          const status = (args?.status as string) || 'pending';
-          const limit = (args?.limit as number) || 20;
-          
-          const todos = db.prepare("SELECT * FROM todos WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(status, limit) as any[];
-          
-          const list = todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content} (ID: ${t.id})`).join('\n');
-          
-          return {
-              content: [{ type: "text", text: list || "No todos found." }]
-          };
+        return taskHandlers.handleListTodos(db, args as any);
       }
-
 
       case "init_conversation":
           return {
@@ -1130,7 +668,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                   text: JSON.stringify(taskHandlers.handleInitConversation(db, args as any), null, 2)
               }]
           };
-
 
       case "add_task":
           return {
@@ -1165,105 +702,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           };
 
       case "delete_relation": {
-          const source = args?.source as string;
-          const target = args?.target as string;
-          const relation = args?.relation as string;
-
-          const res = db.prepare("DELETE FROM relations WHERE source = ? AND target = ? AND relation = ?").run(source, target, relation);
-          
-          if (res.changes === 0) {
-              return { content: [{ type: "text", text: `Relation not found: ${source} --[${relation}]--> ${target}` }], isError: true };
-          }
-          
-          return {
-              content: [{ type: "text", text: `Deleted relation: ${source} --[${relation}]--> ${target}` }]
-          };
+          const { handleDeleteRelation } = await import('./tools/graph_ops.js');
+          return handleDeleteRelation(db, args);
       }
 
       case "delete_entity": {
-          const name = args?.name as string;
-          
-          const entity = db.prepare("SELECT id FROM entities WHERE name = ?").get(name) as any;
-          if (!entity) {
-               return { content: [{ type: "text", text: `Entity '${name}' not found.` }], isError: true };
-          }
-          
-          const tx = db.transaction(() => {
-              // 1. Delete observations
-              db.prepare("DELETE FROM entity_observations WHERE entity_id = ?").run(entity.id);
-              // 2. Delete relations
-              db.prepare("DELETE FROM relations WHERE source = ? OR target = ?").run(name, name);
-              // 3. Delete vector embedding
-              const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
-              if (rowid) {
-                   db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
-              }
-              // 4. Delete entity
-              db.prepare("DELETE FROM entities WHERE id = ?").run(entity.id);
-          });
-          tx();
-          
-          return {
-              content: [{ type: "text", text: `Deleted entity '${name}' and all associated data.` }]
-          };
+          const { handleDeleteEntity } = await import('./tools/graph_ops.js');
+          return handleDeleteEntity(db, args);
       }
       
       case "update_entity": {
-          const currentName = args?.current_name as string;
-          const newName = args?.new_name as string | undefined;
-          const newType = args?.new_type as string | undefined;
-          
-          const entity = db.prepare("SELECT id, name, type FROM entities WHERE name = ?").get(currentName) as any;
-          if (!entity) {
-               return { content: [{ type: "text", text: `Entity '${currentName}' not found.` }], isError: true };
-          }
-          
-          const updates: string[] = [];
-          const params: (string | undefined)[] = [];
-          
-          if (newName && newName !== currentName) {
-              updates.push("name = ?");
-              params.push(newName);
-          }
-          if (newType && newType !== entity.type) {
-              updates.push("type = ?");
-              params.push(newType);
-          }
-          
-          if (updates.length > 0) {
-              const tx = db.transaction(() => {
-                  db.prepare(`UPDATE entities SET ${updates.join(", ")} WHERE id = ?`).run(...params, entity.id);
-                  
-                  if (newName && newName !== currentName) {
-                      db.prepare("UPDATE relations SET source = ? WHERE source = ?").run(newName, currentName);
-                      db.prepare("UPDATE relations SET target = ? WHERE target = ?").run(newName, currentName);
-                  }
-                  
-                  // Re-embed if necessary
-                  if ((newName && newName !== currentName) || (newType && newType !== entity.type)) {
-                       const finalName = newName || currentName;
-                       const finalType = newType || entity.type;
-                       
-                       embedder.embed(finalName + " " + finalType).then(vec => {
-                           const float32 = new Float32Array(vec);
-                           try {
-                               const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
-                               if (rowid) {
-                                   db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
-                                   db.prepare("INSERT INTO vec_entities (rowid, embedding) VALUES (?, ?)").run(rowid.rowid, Buffer.from(float32.buffer));
-                               }
-                           } catch(e) { console.error("Re-embedding failed", e); }
-                      }).catch(e => console.error("Re-embedding generation failed", e));
-                  }
-              });
-              tx();
-              
-              return {
-                  content: [{ type: "text", text: `Updated entity '${currentName}'` }]
-              };
-          } else {
-              return { content: [{ type: "text", text: "No changes requested." }] };
-          }
+          const { handleUpdateEntity } = await import('./tools/graph_ops.js');
+          return handleUpdateEntity(db, args, embedder);
       }
 
       default: {

@@ -8,6 +8,7 @@
   },
   "files": [
     "dist/**/*",
+    "extensions/**/*",
     "README.md",
     "LICENSE"
   ],
@@ -31,7 +32,8 @@
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
     "uuid": "^9.0.1",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "yargs-parser": "^21.1.1"
   },
   "optionalDependencies": {
     "sqlite-vec-linux-arm64": "^0.1.7-alpha.2"
