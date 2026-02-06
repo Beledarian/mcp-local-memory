@@ -1,5 +1,5 @@
 {
-  "name": "@beledarian/mcp-local-memory",
+  "name": "@beledarian/memory",
   "version": "1.0.4",
   "description": "Local memory server for AI agents using SQLite and MCP",
   "main": "dist/index.js",
@@ -34,7 +34,7 @@
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
     "uuid": "^9.0.1",
-    "zod": "^3.22.4",
+    "zod": "^4.0.0",
     "yargs-parser": "^21.1.1"
   },
   "optionalDependencies": {

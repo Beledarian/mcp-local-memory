@@ -7,4 +7,4 @@ startCommand:
     command: "npx"
     args:
       - "-y"
-      - "@beledarian/mcp-local-memory"
+      - "@beledarian/memory"
