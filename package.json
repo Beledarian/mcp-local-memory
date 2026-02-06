@@ -1,9 +1,8 @@
 {
-  "name": "@beledarian/memory",
+  "name": "@beledarian/mcp-local-memory",
   "version": "1.0.4",
   "description": "Local memory server for AI agents using SQLite and MCP",
   "main": "dist/index.js",
-  "module": "./src/index.ts",
   "bin": {
     "mcp-local-memory": "./dist/index.js",
     "memory": "./dist/index.js"
@@ -21,9 +20,7 @@
   "scripts": {
     "build": "tsc && shx chmod +x dist/index.js",
     "start": "node dist/index.js",
-    "test": "tsx tests/test_features.ts",
-    "smithery-dev": "smithery dev",
-    "smithery-build": "smithery build"
+    "test": "tsx tests/test_features.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^0.6.0",
@@ -34,14 +31,13 @@
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
     "uuid": "^9.0.1",
-    "zod": "^4.0.0",
+    "zod": "^3.22.4",
     "yargs-parser": "^21.1.1"
   },
   "optionalDependencies": {
     "sqlite-vec-linux-arm64": "^0.1.7-alpha.2"
   },
   "devDependencies": {
-    "@smithery/cli": "^2.2.1",
     "@types/better-sqlite3": "^7.6.9",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.11.19",

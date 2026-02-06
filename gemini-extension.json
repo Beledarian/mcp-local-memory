@@ -7,7 +7,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@beledarian/memory"
+        "@beledarian/mcp-local-memory"
       ]
     }
   }
