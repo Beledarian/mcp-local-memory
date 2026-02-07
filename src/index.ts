@@ -45,7 +45,7 @@ import * as core from './tools/core.js';
 
 // Load extensions
 const EXTENSIONS_PATH = process.env.EXTENSIONS_PATH;
-const extensions = loadExtensions(EXTENSIONS_PATH);
+const extensions = await loadExtensions(EXTENSIONS_PATH);
 
 // Initialize DB
 const db = getDb();

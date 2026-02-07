@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
 import type { Database } from 'better-sqlite3';
 
 /**
@@ -22,7 +23,7 @@ export interface Extension {
     init?: (db: Database) => void | Promise<void>;
 }
 
-export function loadExtensions(extensionsPath?: string): Extension[] {
+export async function loadExtensions(extensionsPath?: string): Promise<Extension[]> {
     if (!extensionsPath) {
         return [];
     }
@@ -40,16 +41,17 @@ export function loadExtensions(extensionsPath?: string): Extension[] {
         for (const file of files) {
             try {
                 const modulePath = path.join(extensionsPath, file);
-                const module = require(modulePath);
+                const fileUrl = pathToFileURL(modulePath).href;
+                const module = await import(fileUrl);
                 
-                // Expected format: export function handleToolName() and export const TOOL_NAME_TOOL
-                // Or: export default { handler, tool }
+                // ESM usually has default, CJS loaded via import() is also wrapped or available directly
+                const actualModule = module.default || module;
                 
-                if (module.default && module.default.handler && module.default.tool) {
-                    extensions.push(module.default);
-                    console.log(`[Extensions] Loaded: ${module.default.tool.name}`);
+                if (actualModule.handler && actualModule.tool) {
+                    extensions.push(actualModule as Extension);
+                    console.log(`[Extensions] Loaded: ${actualModule.tool.name}`);
                 } else {
-                    // Auto-detect handler and tool definition
+                    // Auto-detect handler and tool definition in exports
                     const handlerKey = Object.keys(module).find(k => k.startsWith('handle'));
                     const toolKey = Object.keys(module).find(k => k.endsWith('_TOOL') || k.endsWith('Tool'));
                     const initKey = Object.keys(module).find(k => k === 'init');
