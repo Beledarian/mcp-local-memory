@@ -87,9 +87,9 @@ export function handleSoulMaintenance(db: Database) {
 
 // Startup Hook
 export function init(db: Database) {
-    console.log("[Soul] Running maintenance on startup...");
+    console.error("[Soul] Running maintenance on startup...");
     const result = handleSoulMaintenance(db);
-    console.log("[Soul] Maintenance result:", JSON.stringify(result.stats));
+    console.error("[Soul] Maintenance result:", JSON.stringify(result.stats));
 }
 
 export const SOUL_MAINTENANCE_TOOL = {

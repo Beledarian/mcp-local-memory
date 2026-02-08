@@ -49,7 +49,7 @@ export async function loadExtensions(extensionsPath?: string): Promise<Extension
                 
                 if (actualModule.handler && actualModule.tool) {
                     extensions.push(actualModule as Extension);
-                    console.error(`[Extensions] Loaded: ${actualModule.tool.name}`);
+                    // console.error(`[Extensions] Loaded: ${actualModule.tool.name}`);
                 } else {
                     // Auto-detect handler and tool definition in exports
                     const handlerKey = Object.keys(module).find(k => k.startsWith('handle'));
@@ -64,11 +64,11 @@ export async function loadExtensions(extensionsPath?: string): Promise<Extension
 
                         if (initKey && typeof module[initKey] === 'function') {
                             extension.init = module[initKey];
-                            console.error(`[Extensions] Found init hook for: ${module[toolKey].name}`);
+                            // console.error(`[Extensions] Found init hook for: ${module[toolKey].name}`);
                         }
 
                         extensions.push(extension);
-                        console.error(`[Extensions] Loaded: ${module[toolKey].name}`);
+                        // console.error(`[Extensions] Loaded: ${module[toolKey].name}`);
                     }
                 }
             } catch (err: any) {

@@ -53,6 +53,8 @@ const db = getDb();
 console.error(`[Server] Database initialized at: ${RESOLVED_DB_PATH}`);
 
 // Initialize Extensions (Startup Hooks)
+// Initialize Extensions logic moved to run() function to ensure sequential startup
+/*
 (async () => {
     for (const ext of extensions) {
         if (ext.init) {
@@ -66,6 +68,7 @@ console.error(`[Server] Database initialized at: ${RESOLVED_DB_PATH}`);
         }
     }
 })();
+*/
 
 // Register Custom Functions
 // Leventshtein distance for fuzzy matching
@@ -748,8 +751,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 async function run() {
   const transport = new StdioServerTransport();
+
+  // Initialize Extensions (Startup Hooks)
+  for (const ext of extensions) {
+      if (ext.init) {
+          try {
+              // console.error(`[Server] Running init hook for ${ext.tool.name}...`);
+              await ext.init(db);
+              // console.error(`[Server] Init hook complete for ${ext.tool.name}`);
+          } catch (err: any) {
+              // console.error(`[Server] Init hook failed for ${ext.tool.name}:`, err.message);
+          }
+      }
+  }
+
   await server.connect(transport);
-  console.error("Local Memory MCP Server running on stdio");
+  // console.error("Local Memory MCP Server running on stdio");
 }
 
 run().catch((error) => {

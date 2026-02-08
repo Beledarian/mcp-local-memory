@@ -40,7 +40,7 @@ export const getEmbedder = (): EmbeddingProvider => {
             globalEmbedder = new NoOpEmbedder();
         } else {
             // Switch to LocalEmbedder
-            console.error("Initializing Local Embeddings (all-MiniLM-L6-v2)...");
+            // console.error("Initializing Local Embeddings (all-MiniLM-L6-v2)...");
             globalEmbedder = new LocalEmbedder();
         }
     }
