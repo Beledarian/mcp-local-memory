@@ -48,7 +48,7 @@ export function getDb(customPath?: string) {
   try {
     sqliteVec.load(db);
   } catch (err) {
-    console.warn("Failed to load sqlite-vec extension. Vector search will not be available.", err);
+    console.error("Failed to load sqlite-vec extension. Vector search will not be available.", err);
   }
   
   return db;

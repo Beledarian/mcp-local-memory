@@ -57,9 +57,9 @@ console.error(`[Server] Database initialized at: ${RESOLVED_DB_PATH}`);
     for (const ext of extensions) {
         if (ext.init) {
             try {
-                console.log(`[Server] Running init hook for ${ext.tool.name}...`);
+                console.error(`[Server] Running init hook for ${ext.tool.name}...`);
                 await ext.init(db);
-                console.log(`[Server] Init hook complete for ${ext.tool.name}`);
+                console.error(`[Server] Init hook complete for ${ext.tool.name}`);
             } catch (err: any) {
                 console.error(`[Server] Init hook failed for ${ext.tool.name}:`, err.message);
             }

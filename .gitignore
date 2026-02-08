@@ -10,6 +10,8 @@ test_wsl.sh
 sqlite-vec/
 
 # Clutter & Diagnostics
+debug_sqlite_math.cjs
+test_init.json
 reproduce_*.ts
 diagnose_*.ts
 list_memories_*.ts
@@ -27,5 +29,4 @@ soul/
 *.soul.ts
 .personal/
 
-sync_wsl.sh
 sync_wsl.sh

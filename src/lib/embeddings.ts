@@ -6,7 +6,7 @@ export interface EmbeddingProvider {
 
 export class NoOpEmbedder implements EmbeddingProvider {
   async embed(text: string): Promise<number[]> {
-    console.warn("Using NoOpEmbedder. Semantic search will not work effectively.");
+    console.error("Using NoOpEmbedder. Semantic search will not work effectively.");
     return new Array(384).fill(0);
   }
 }
