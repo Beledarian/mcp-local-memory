@@ -17,4 +17,4 @@ Brief example instructions for agents working with the mcp-local-memory server.
 
 ---
 
-**For comprehensive instructions, see [detailed_prompt.md](file:///c:/Users/Laurin/Documents/GitHub/mcp-local-memory/detailed_prompt.md)**
+**For comprehensive instructions, see [detailed_prompt.md](detailed_prompt.md)**
