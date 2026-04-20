@@ -48,7 +48,7 @@ export const CreateRelationArgsSchema = z.object({
     source: z.string(),
     target: z.string(),
     relation: z.string(),
-    depth: z.number().optional()
+    depth: z.number().min(1).max(3).optional()
 });
 
 export const ReadGraphArgsSchema = z.object({
