@@ -367,11 +367,60 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
 });
 
+import * as schemas from "./tools/schemas.js";
+
+const toolSchemas: Record<string, any> = {
+  "cli": schemas.CliArgsSchema,
+  "remember_fact": schemas.RememberFactArgsSchema,
+  "remember_facts": schemas.RememberFactsArgsSchema,
+  "recall": schemas.RecallArgsSchema,
+  "forget": schemas.ForgetArgsSchema,
+  "list_recent_memories": schemas.ListRecentMemoriesArgsSchema,
+  "export_memories": schemas.ExportMemoriesArgsSchema,
+  "create_entity": schemas.CreateEntityArgsSchema,
+  "create_relation": schemas.CreateRelationArgsSchema,
+  "read_graph": schemas.ReadGraphArgsSchema,
+  "cluster_memories": schemas.ClusterMemoriesArgsSchema,
+  "consolidate_context": schemas.ConsolidateContextArgsSchema,
+  "delete_observation": schemas.DeleteObservationArgsSchema,
+  "add_todo": schemas.AddTodoArgsSchema,
+  "complete_todo": schemas.CompleteTodoArgsSchema,
+  "list_todos": schemas.ListTodosArgsSchema,
+  "init_conversation": schemas.InitConversationArgsSchema,
+  "add_task": schemas.AddTaskArgsSchema,
+  "update_task_status": schemas.UpdateTaskStatusArgsSchema,
+  "list_tasks": schemas.ListTasksArgsSchema,
+  "delete_task": schemas.DeleteTaskArgsSchema,
+  "delete_relation": schemas.DeleteRelationArgsSchema,
+  "delete_entity": schemas.DeleteEntityArgsSchema,
+  "update_entity": schemas.UpdateEntityArgsSchema,
+};
+
 // Handle tool execution
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: rawArgs } = request.params;
 
   try {
+    let args: any = rawArgs;
+
+    // Validate with Zod
+    if (toolSchemas[name]) {
+      try {
+        args = toolSchemas[name].parse(rawArgs);
+      } catch (validationError: any) {
+        if (validationError.name === 'ZodError') {
+          const errorMessage = validationError.errors
+            .map((e: any) => (e.path.length > 0 ? e.path.join('.') + ': ' : '') + e.message)
+            .join(', ');
+          return {
+            isError: true,
+            content: [{ type: "text", text: "Validation Error: " + errorMessage }]
+          };
+        }
+        throw validationError;
+      }
+    }
+
     switch (name) {
       case "cli": {
         const { handleCLI } = await import('./tools/cli.js');
