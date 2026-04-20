@@ -367,11 +367,53 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
 });
 
+import * as schemas from "./tools/schemas.js";
+
 // Handle tool execution
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args } = request.params;
+  const { name, arguments: rawArgs } = request.params;
 
   try {
+    let args: any = rawArgs;
+
+    // Validate with Zod
+    try {
+      switch (name) {
+        case "cli": args = schemas.CliArgsSchema.parse(rawArgs); break;
+        case "remember_fact": args = schemas.RememberFactArgsSchema.parse(rawArgs); break;
+        case "remember_facts": args = schemas.RememberFactsArgsSchema.parse(rawArgs); break;
+        case "recall": args = schemas.RecallArgsSchema.parse(rawArgs); break;
+        case "forget": args = schemas.ForgetArgsSchema.parse(rawArgs); break;
+        case "list_recent_memories": args = schemas.ListRecentMemoriesArgsSchema.parse(rawArgs); break;
+        case "export_memories": args = schemas.ExportMemoriesArgsSchema.parse(rawArgs); break;
+        case "create_entity": args = schemas.CreateEntityArgsSchema.parse(rawArgs); break;
+        case "create_relation": args = schemas.CreateRelationArgsSchema.parse(rawArgs); break;
+        case "read_graph": args = schemas.ReadGraphArgsSchema.parse(rawArgs); break;
+        case "cluster_memories": args = schemas.ClusterMemoriesArgsSchema.parse(rawArgs); break;
+        case "consolidate_context": args = schemas.ConsolidateContextArgsSchema.parse(rawArgs); break;
+        case "delete_observation": args = schemas.DeleteObservationArgsSchema.parse(rawArgs); break;
+        case "add_todo": args = schemas.AddTodoArgsSchema.parse(rawArgs); break;
+        case "complete_todo": args = schemas.CompleteTodoArgsSchema.parse(rawArgs); break;
+        case "list_todos": args = schemas.ListTodosArgsSchema.parse(rawArgs); break;
+        case "init_conversation": args = schemas.InitConversationArgsSchema.parse(rawArgs); break;
+        case "add_task": args = schemas.AddTaskArgsSchema.parse(rawArgs); break;
+        case "update_task_status": args = schemas.UpdateTaskStatusArgsSchema.parse(rawArgs); break;
+        case "list_tasks": args = schemas.ListTasksArgsSchema.parse(rawArgs); break;
+        case "delete_task": args = schemas.DeleteTaskArgsSchema.parse(rawArgs); break;
+        case "delete_relation": args = schemas.DeleteRelationArgsSchema.parse(rawArgs); break;
+        case "delete_entity": args = schemas.DeleteEntityArgsSchema.parse(rawArgs); break;
+        case "update_entity": args = schemas.UpdateEntityArgsSchema.parse(rawArgs); break;
+      }
+    } catch (validationError: any) {
+      if (validationError.name === 'ZodError') {
+        return {
+          isError: true,
+          content: [{ type: "text", text: `Validation Error: ${validationError.message}` }]
+        };
+      }
+      throw validationError;
+    }
+
     switch (name) {
       case "cli": {
         const { handleCLI } = await import('./tools/cli.js');
