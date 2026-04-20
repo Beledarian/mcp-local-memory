@@ -18,11 +18,11 @@ export const RememberFactsArgsSchema = z.object({
 
 export const RecallArgsSchema = z.object({
     query: z.string(),
-    limit: z.number().optional(),
+    limit: z.coerce.number().optional(),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
-    json: z.boolean().optional(),
-    debug: z.boolean().optional()
+    json: z.coerce.boolean().optional(),
+    debug: z.coerce.boolean().optional()
 });
 
 export const ForgetArgsSchema = z.object({
@@ -30,8 +30,8 @@ export const ForgetArgsSchema = z.object({
 });
 
 export const ListRecentMemoriesArgsSchema = z.object({
-    limit: z.number().optional(),
-    json: z.boolean().optional()
+    limit: z.coerce.number().optional(),
+    json: z.coerce.boolean().optional()
 });
 
 export const ExportMemoriesArgsSchema = z.object({
@@ -48,23 +48,23 @@ export const CreateRelationArgsSchema = z.object({
     source: z.string(),
     target: z.string(),
     relation: z.string(),
-    depth: z.number().min(1).max(3).optional()
+    depth: z.coerce.number().min(1).max(3).optional()
 });
 
 export const ReadGraphArgsSchema = z.object({
     center: z.string().optional(),
-    depth: z.number().optional(),
-    json: z.boolean().optional()
+    depth: z.coerce.number().optional(),
+    json: z.coerce.boolean().optional()
 });
 
 export const ClusterMemoriesArgsSchema = z.object({
-    k: z.number().optional()
+    k: z.coerce.number().optional()
 });
 
 export const ConsolidateContextArgsSchema = z.object({
     text: z.string(),
     strategy: z.enum(["nlp", "llm"]).optional(),
-    limit: z.number().optional()
+    limit: z.coerce.number().optional()
 });
 
 export const DeleteObservationArgsSchema = z.object({
@@ -83,7 +83,7 @@ export const CompleteTodoArgsSchema = z.object({
 
 export const ListTodosArgsSchema = z.object({
     status: z.enum(["pending", "completed"]).optional(),
-    limit: z.number().optional()
+    limit: z.coerce.number().optional()
 });
 
 export const InitConversationArgsSchema = z.object({
