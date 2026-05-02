@@ -66,13 +66,28 @@ You can use the server directly without installing it globally, using `npx`. Thi
 
 ### Method 2: Install via NPM
 
-Global installation provides the `memory` command:
+Global installation provides the `memory` and `mcp-local-memory` commands:
 
 ```bash
 npm install -g @beledarian/mcp-local-memory
 
 # Usage
 memory --help
+```
+
+**Add to your MCP Configuration:**
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "mcp-local-memory",
+      "env": {
+        "ARCHIVIST_STRATEGY": "nlp"
+      }
+    }
+  }
+}
 ```
 ```
 

@@ -1,6 +1,6 @@
 {
   "name": "@beledarian/mcp-local-memory",
-  "version": "1.0.7",
+  "version": "1.1.0",
   "description": "Local memory server for AI agents using SQLite and MCP",
   "main": "dist/index.js",
   "bin": {
@@ -28,6 +28,7 @@
     "better-sqlite3": "^11.8.1",
     "chrono-node": "^2.9.0",
     "compromise": "^14.14.5",
+    "fs-extra": "^11.3.3",
     "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
     "uuid": "^9.0.1",
@@ -42,7 +43,6 @@
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.11.19",
     "@types/uuid": "^9.0.8",
-    "fs-extra": "^11.3.3",
     "shx": "^0.4.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"
