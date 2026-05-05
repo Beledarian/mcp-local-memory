@@ -195,6 +195,11 @@ This package includes first-party extensions to enhance memory management:
 
 1.  **Soul Maintenance** (`extensions/soul_maintenance.ts`): Implements a "biological" lifecycle where memories must earn importance through use and naturally decay over time unless immunized by core tags.
 
+### Community Extensions
+
+1.  **Theme DB Extension** ([GitHub](https://github.com/Beledarian/theme-db-extension) | [npm](https://www.npmjs.com/package/theme-db-extension)): Adds theme-separated memory databases to isolate contexts for different projects or topics.
+    - **Install**: Run `npx theme-db-extension install` to automatically copy the tools to your `~/.memory/extensions` directory.
+
 To use these official extensions, set your `EXTENSIONS_PATH` to the `extensions` folder inside the installed package:
 
 ```bash
