@@ -48,7 +48,7 @@ export const REMEMBER_FACTS_TOOL: any = {
 
 export const RECALL_TOOL: any = {
   name: "recall",
-  description: "Search for relevant memories based on a query. Use this to find information from previous conversations that might be relevant to the current context.",
+  description: "Search active memories without changing lifecycle state, importance, reinforcement, or decay. Returned active results may record bounded hashed familiarity telemetry. Outdated and incorrect memories are suppressed unless include_outdated=true. Use reinforce_memory only after evaluating a result.",
   inputSchema: {
     type: "object",
     properties: {
@@ -75,9 +75,37 @@ export const RECALL_TOOL: any = {
       debug: {
         type: "boolean",
         description: "If true, includes debug information (steps taken, scores) in the response. Default: false."
+      },
+      include_outdated: {
+        type: "boolean",
+        description: "If true, includes memories marked outdated or incorrect for history/audit searches. Default: false."
       }
     },
     required: ["query"]
+  }
+};
+
+export const REINFORCE_MEMORY_TOOL: any = {
+  name: "reinforce_memory",
+  description: "Record explicit, auditable feedback after evaluating a memory. Outdated and incorrect memories are suppressed from default recall; restore makes one active again. Positive feedback has capped, diminishing gains. Do not call this merely because recall returned the memory.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      memory_id: {
+        type: "string",
+        description: "The unique ID of the memory being evaluated."
+      },
+      signal: {
+        type: "string",
+        enum: ["used", "important", "irrelevant", "incorrect", "outdated", "restore"],
+        description: "used=genuinely helped; important=durable; irrelevant=off-topic; incorrect=false; outdated=superseded but retained; restore=make active again."
+      },
+      reason: {
+        type: "string",
+        description: "Optional short audit note explaining why the signal was recorded."
+      }
+    },
+    required: ["memory_id", "signal"]
   }
 };
 
@@ -145,7 +173,7 @@ export const CREATE_ENTITY_TOOL: any = {
 
 export const CREATE_RELATION_TOOL: any = {
   name: "create_relation",
-  description: "Create a relationship link between two existing entities in the graph (e.g., 'Alice' -> 'works at' -> 'Google').",
+  description: "Create a directional relationship between two entities (e.g., 'Alice' -> 'works at' -> 'Google'). Missing endpoints are created as entities with type 'Unknown'.",
   inputSchema: {
     type: "object",
     properties: {

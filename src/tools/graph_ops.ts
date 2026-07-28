@@ -2,7 +2,7 @@
 import { Database } from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 
-export function handleCreateEntity(db: Database, args: any, embedder?: any) {
+export async function handleCreateEntity(db: Database, args: any, embedder?: any) {
     const name = args?.name as string;
     const type = args?.type as string;
     const observations = (args?.observations as string[]) || [];
@@ -14,6 +14,9 @@ export function handleCreateEntity(db: Database, args: any, embedder?: any) {
     let message = "";
 
     if (existing) {
+         db.prepare(
+             "UPDATE entities SET auto_generated = 0 WHERE id = ?",
+         ).run(existing.id);
          message = `Entity '${name}' already exists (as '${existing.name}').`;
          if (observations.length > 0) {
              const insertObs = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
@@ -37,12 +40,16 @@ export function handleCreateEntity(db: Database, args: any, embedder?: any) {
          
          // Generate Entity Embedding
          if (embedder) {
-            embedder.embed(name + " " + type).then((vec: any) => {
+            try {
+               const vec = await embedder.embed(name + " " + type);
                const float32 = new Float32Array(vec);
-               try {
-                   db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(entityId, Buffer.from(float32.buffer));
-               } catch (e) { console.warn("Entity embedding insert failed:", e); }
-            }).catch((e: any) => console.error("Embedding generation failed:", e));
+               db.prepare(`
+                   INSERT INTO vec_entities (rowid, embedding)
+                   SELECT rowid, ? FROM entities WHERE id = ?
+               `).run(Buffer.from(float32.buffer), entityId);
+            } catch (e) {
+               console.warn("Entity embedding insert failed:", e);
+            }
          }
 
          message = `Created entity '${name}' of type '${type}'.`;
@@ -58,27 +65,57 @@ export function handleCreateRelation(db: Database, args: any) {
     const target = args?.target as string;
     const relation = args?.relation as string;
 
-    const ensureEntity = (name: string) => {
-        try {
+    const createRelation = db.transaction(() => {
+        const ensureManualEntity = (name: string) => {
+            const existing = db.prepare(
+                "SELECT id FROM entities WHERE name = ?",
+            ).get(name) as { id: string } | undefined;
+            if (existing) {
+                db.prepare(
+                    "UPDATE entities SET auto_generated = 0 WHERE id = ?",
+                ).run(existing.id);
+                return;
+            }
             const id = uuidv4();
-            db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, "Unknown", "[]");
-        } catch (ignored) {} 
-    };
-
-    ensureEntity(source);
-    ensureEntity(target);
-
-    try {
-        db.prepare(`INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(source, target, relation);
-        return {
-            content: [{ type: "text", text: `Created relation: ${source} --[${relation}]--> ${target}` }]
+            db.prepare(`
+                INSERT INTO entities(
+                    id, name, type, observations, auto_generated
+                ) VALUES (?, ?, 'Unknown', '[]', 0)
+            `).run(id, name);
         };
-    } catch (error: any) {
-        if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-             return { content: [{ type: "text", text: `Relation already exists.` }] };
+
+        ensureManualEntity(source);
+        ensureManualEntity(target);
+
+        const existingRelation = db.prepare(`
+            SELECT 1 FROM relations
+            WHERE source = ? AND target = ? AND relation = ?
+        `).get(source, target, relation);
+        if (existingRelation) {
+            db.prepare(`
+                UPDATE relations
+                SET auto_generated = 0
+                WHERE source = ? AND target = ? AND relation = ?
+            `).run(source, target, relation);
+            return false;
         }
-        throw error;
-    }
+        db.prepare(`
+            INSERT INTO relations(
+                source, target, relation, auto_generated
+            ) VALUES (?, ?, ?, 0)
+        `).run(source, target, relation);
+        return true;
+    });
+
+    const created = createRelation.immediate();
+    return {
+        content: [{
+            type: "text",
+            text: created
+                ? `Created relation: ${source} --[${relation}]--> ${target}`
+                : "Relation already exists and is now manually maintained.",
+        }],
+    };
 }
 
 export function handleDeleteRelation(db: Database, args: any) {
@@ -125,7 +162,7 @@ export function handleDeleteEntity(db: Database, args: any) {
     };
 }
 
-export function handleUpdateEntity(db: Database, args: any, embedder?: any) {
+export async function handleUpdateEntity(db: Database, args: any, embedder?: any) {
     const currentName = args?.current_name as string;
     const newName = args?.new_name as string | undefined;
     const newType = args?.new_type as string | undefined;
@@ -155,25 +192,24 @@ export function handleUpdateEntity(db: Database, args: any, embedder?: any) {
                 db.prepare("UPDATE relations SET source = ? WHERE source = ?").run(newName, currentName);
                 db.prepare("UPDATE relations SET target = ? WHERE target = ?").run(newName, currentName);
             }
-            
-            // Re-embed if necessary
-            if (embedder && ((newName && newName !== currentName) || (newType && newType !== entity.type))) {
-                 const finalName = newName || currentName;
-                 const finalType = newType || entity.type;
-                 
-                 embedder.embed(finalName + " " + finalType).then((vec: any) => {
-                     const float32 = new Float32Array(vec);
-                     try {
-                         const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
-                         if (rowid) {
-                             db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
-                             db.prepare("INSERT INTO vec_entities (rowid, embedding) VALUES (?, ?)").run(rowid.rowid, Buffer.from(float32.buffer));
-                         }
-                     } catch(e) { console.error("Re-embedding failed", e); }
-                }).catch((e: any) => console.error("Re-embedding generation failed", e));
-            }
         });
         tx();
+
+        if (embedder && ((newName && newName !== currentName) || (newType && newType !== entity.type))) {
+            const finalName = newName || currentName;
+            const finalType = newType || entity.type;
+            try {
+                const vec = await embedder.embed(finalName + " " + finalType);
+                const float32 = new Float32Array(vec);
+                const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
+                if (rowid) {
+                    db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
+                    db.prepare("INSERT INTO vec_entities (rowid, embedding) VALUES (?, ?)").run(rowid.rowid, Buffer.from(float32.buffer));
+                }
+            } catch(e) {
+                console.error("Re-embedding failed", e);
+            }
+        }
         
         return {
             content: [{ type: "text", text: `Updated entity '${currentName}'` }]

@@ -1,172 +1,188 @@
-## 🚨 MANDATORY PROTOCOL - READ THIS FIRST
+# Agent Guidance for Local Memory
 
-**FOR COMPLEX WORK**: Call `init_conversation(name)` which **automatically provides full startup context** including user info, recent memories, relations, tasks, and todos. This should be your first action in any new technical session.
+Use this as a starting point for an agent connected to `mcp-local-memory`.
+Adapt it to the host application's own tool, privacy, and approval rules.
 
-**FOR ONGOING TURNS**: Read `memory://turn-context` every ~10 turns during long sessions to refresh your awareness of active tasks, entities, and recent activity.
+## Start and Refresh Context
 
-> [!NOTE]
-> **Tool Naming**: Call tools directly (e.g., `recall`, `init_conversation`) without server prefixes like `local-memory_`.
+For complex or task-oriented work:
 
+1. Call `init_conversation(name)` and retain the returned `conversation_id`.
+2. Read `memory://current-context` separately. `init_conversation` intentionally
+   returns only a small payload and does not inline startup context.
+3. Scope new tasks with that `conversation_id` when useful.
 
-This is not optional. Proper context awareness is an absolute requirement that takes precedence over all other operations.
+During a long conversation, read `memory://turn-context` when you need a compact
+refresh of active tasks, important entities, relations, and recent activity.
+Resource access is client-dependent; do not claim context was loaded unless the
+read succeeded.
 
-### 🔍 Internal Information Mandate
+Call tools by the names exposed by the client, commonly `recall`,
+`remember_fact`, and `reinforce_memory`. Do not assume a particular server-name
+prefix.
 
-**CRITICAL: ALWAYS CHECK INTERNAL MEMORY BEFORE EXTERNAL SOURCES**
+## Recall Before Guessing
 
-Assume that **all knowledge about user projects, preferences, and history is stored within the memory** unless the user explicitly states otherwise.
+Use `recall(query)` for user-specific history, project decisions, configuration
+paths, prior fixes, and preferences that could affect the current work. Use
+`read_graph(center)` when entity relationships matter.
 
-Before searching the web, reading external documentation, or making assumptions:
+Recall can also search by time. Put a natural-language date in the query, such
+as `what changed last week?`, `decisions from yesterday`, or `work in 2025`.
+For a precise range, pass ISO 8601 `startDate` and `endDate`. The date filter
+applies to when a memory was created; the remaining query text is used for
+topical matching.
 
-1. **Search Memory First**: Use `recall(query)` to check if information exists in memory.
-2. **Exhaustive Internal Research**: If the first query fails, try broader or related queries (e.g., check for partial matches or project tags).
-3. **Check Relevant Entities**: Use `read_graph(center="Topic")` to explore what is known.
-4. **External as Last Resort**: Only if information is definitively not in memory should you use external sources (web search, generic docs).
-5. **Save Discoveries**: Always `remember_fact` when you find useful external information.
+Memory is evidence, not unquestionable truth:
 
-**Why this matters:**
-- Internal memories are user-specific and authoritative.
-- Past decisions and technical preferences are stored here.
-- External sources may provide generic advice that conflicts with the user's specific setup.
+- Recall can return fewer results than requested because weak and near-duplicate
+  candidates are removed.
+- A weak or empty result means the store did not find a sufficiently relevant
+  match. It does not prove the fact never existed.
+- Verify drift-prone, safety-critical, or externally observable facts against
+  current sources when practical.
+- Distinguish remembered facts from facts verified in the current turn.
 
-**Example workflow:**
-```
-User: "How do I configure the database?"
-❌ DON'T: Immediately search web for generic database config
-✅ DO: recall("database configuration") → Use saved approach → If not found, search externally → Save findings
-```
+Recall does not increase importance, reinforcement count, or refresh decay.
+The server may record a hashed, daily-deduplicated familiarity exposure for a
+returned active memory. This provides a small access-based preference on later
+recalls; explicit feedback is the stronger path for durable changes.
 
-### Required Workflow for Complex Work:
-1. ✅ CALL `init_conversation(name)` - Automatically provides full context.
-2. 📊 Analyze the provided context (user info, todos, entities, relations, tasks, memories).
-3. 🔍 Use `recall()` proactively if you need specific historical information.
-4. 💭 Respond to the user with full awareness of their context.
-5. 💾 Save new facts immediately with `remember_fact()` or `remember_facts()`.
+## Explicit Feedback
 
-### Refreshing Context During Long Sessions:
-- 🔄 READ `memory://turn-context` every ~10 turns to refresh awareness.
-- Updates you on active tasks, top entities, key relations, and recent activity.
+After actually evaluating a recalled memory, use:
 
-## 📝 Proactive Memory Usage
-
-**CRITICAL: Be proactive with memory! Call `remember_fact` FREQUENTLY whenever the user shares important information.**
-
-### Save These IMMEDIATELY:
-- ✅ User preferences, opinions, and "the user's way"
-- ✅ Project names, goals, status, and technical stacks
-- ✅ Technical decisions and rationale
-- ✅ **Useful patterns, workflows, and code snippets**
-- ✅ **Solutions to problems** that might recur
-- ✅ **Configuration details** and environment setup
-- ✅ Specialized knowledge or domain expertise
-- ✅ Relationships between entities
-
-### Batch Multiple Facts:
-**USE `remember_facts()` (plural)** to save multiple distinct points at once (e.g., specialized knowledge, list of preferences) to reduce latency and round-trips.
-
-### Save Useful Knowledge:
-When you learn something useful, discover interesting facts about user projects, create reusable code patterns, or solve complex problems, **save them to memory immediately**. This builds a shared knowledge base that helps you (and other agent instances) provide better assistance over time.
-
-**Examples of knowledge worth saving:**
-- "Discovered that WGSL shader compilation errors can be debugged by checking browser console for detailed error messages"
-- "User prefers TypeScript strict mode enabled for all new projects"
-- "Pattern for handling async errors in Rust: use Result<T, E> with ? operator for propagation"
-- "mcp-local-memory server uses better-sqlite3 which requires C++ build tools on Windows"
-
-## 🔍 Search Strategy
-
-1. **Overview First**: Use `read_graph(center="Topic")` to get the "big picture".
-2. **Temporal Recall**: Use **Time Tunnel** queries in `recall` (e.g., "what did we do yesterday?", "last week's progress") to find temporally relevant info.
-3. **Drill Down**: Use `recall(query)` to fetch specific details or code snippets.
-4. **Topic View**: Use `cluster_memories(k=5)` to get a bird's-eye view of thematic clusters.
-
-### Proactive Recall
-
-**Use recall when:**
-- Starting work on a known project (use `recall` proactively).
-- User mentions a topic or entity.
-- Making recommendations or debugging issues.
-
-### Research Dynamically Before Acting
-
-**IMPORTANT: Before making assumptions about configurations, file locations, or workflows, CHECK MEMORY FIRST.**
-
-When you need to know:
-- Where configuration files are located (e.g., "where are global agent rules?")
-- How to perform a specific workflow (e.g., "how to deploy X?")
-- What patterns or conventions to follow (e.g., "user's preferred code style?")
-- Technical details about projects (e.g., "what database does project Y use?")
-
-**Always use `recall()` to research the answer from memory before proceeding.** This ensures you use the most accurate, user-specific information rather than generic assumptions.
-
-**Example workflow:**
-```
-User: "Update the global agent rules"
-❌ DON'T: Assume location and edit blindly
-✅ DO: recall("global agent rules location") → Find saved path → Edit correct file
+```text
+reinforce_memory(memory_id, signal, reason?)
 ```
 
-## 🌐 Garden the Graph
+Signals:
 
-If you discover relationships that aren't in the graph (e.g., "Project A uses Library B"), **proactively** use `create_relation` to link them. Don't simply store facts; build the network.
+- `used`: the memory genuinely contributed to downstream work.
+- `important`: the memory was explicitly judged durable and important.
+- `irrelevant`: the result was off-topic for the query.
+- `incorrect`: the stored claim is false; suppress it from default recall.
+- `outdated`: the claim was superseded; retain it for history but suppress it
+  from default recall and context.
+- `restore`: explicitly make an outdated/incorrect memory active again.
 
-## 🎯 Task & Conversation Management
+Do not reinforce every returned result. Positive signals have a one-hour
+same-signal cooldown, seven-day diminishing gains, and a reinforcement growth
+ceiling of `0.95`. Negative feedback lowers importance immediately. All events
+are recorded in `memory_feedback`.
 
-### Conversation-Scoped Tasks
+Use `forget(memory_id)` when deletion is appropriate or the user asks for it.
+Use `incorrect` or `outdated` when retaining an auditable historical record is
+preferable. Use `recall(..., include_outdated=true)` only for deliberate
+history/audit searches.
 
-**IMPORTANT**: Use `init_conversation` at the start of any complex, multi-step work:
-- New project implementations, multi-file refactors, feature development, bug fixes.
+## Selective Writing
 
-**Workflow:**
-1. **Initialize Session**: `init_conversation(name="...")` → Returns `conversation_id` + **automatic startup context** (user info, recent memories, relations, active tasks, todos).
-2. **Add Tasks**: `add_task(content, section, conversation_id)` to organize by area (e.g., "Backend", "Testing").
-3. **Track Progress**: `update_task_status(id, status)` to `pending`, `in-progress`, or `complete`.
-4. **⚠️ CRITICAL - Task Gardening**: **MANDATORY** - Use `delete_task(id)` for completed/obsolete tasks to prevent context pollution.
+Save information that is likely to matter across sessions:
 
-### Global Todos (Simple Tasks)
+- durable user preferences;
+- project decisions and their rationale;
+- stable paths, commands, or environment constraints;
+- confirmed fixes and reusable technical findings;
+- explicit goals or commitments.
 
-**When to use:** Quick, one-off reminders not tied to a specific project session.
-- `add_todo(content, due_date?)`
-- `complete_todo(id)` - Automatically archives to memory as "Completed task: ...".
+Avoid saving:
 
-## 🔧 Tool Library Quick Reference
+- unverified guesses or speculative conclusions;
+- transient chatter and one-off status noise;
+- duplicate paraphrases of an existing memory;
+- credentials, tokens, or other secrets unless the user explicitly intends
+  local persistence and the host policy permits it.
 
-### Memory & Recall
-- **`remember_fact/facts`**: Save new info. Automatic Entity Extraction is enabled (NLP/LLM).
-- **`recall(query, limit?, startDate?, endDate?)`**: Hybrid search (Vector + Keyword) with **Time Tunnel** support.
-- **`cluster_memories(k?)`**: Group knowledge into thematic clusters.
+Use `remember_fact(text, tags?)` for one fact and `remember_facts(facts)` for
+several independent facts. Keep each fact self-contained enough to be useful in
+a later session. Saving waits for embedding and configured archivist work to
+finish before acknowledging success.
 
-### Knowledge Graph
-- **`create_entity(name, type, observations?)`**: Define/update an entity. **Smart Append**: Adds new observations to existing entities.
-- **`delete_observation(entity_name, observations)`**: Surgical removal of invalid facts.
-- **`create_relation(source, target, relation)`**: Link two entities.
-- **`delete_relation(source, target, relation)`**: Delete a specific link between entities.
-- **`delete_entity(name)`**: Delete an entity AND cascading relationships.
-- **`update_entity(current_name, new_name?, new_type?)`**: Rename an entity.
-- **`read_graph(center?, depth?)`**: Explore linked facts.
+The configured archivist may derive entities and relations:
 
-### Tasks & Todos
-- **`init_conversation(name?)`**: Start session + auto-context.
-- **`add_task(content, section?, conversation_id?)`**: Focused project tracking.
-- **`add_todo(content, due_date?)`**: Simple one-off reminders.
-- **`delete_task(id)`**: **MANDATORY** cleanup for completed work.
+- `passive`: no automatic extraction;
+- `nlp`: offline rule/NLP extraction;
+- `llm`: sends saved text to the configured `OLLAMA_URL`.
 
----
+## Entities and Relations
 
-## Why This Matters
+Use the graph when the relationship between named concepts matters, rather
+than treating every statement as isolated text:
 
-**Failure to read context means:**
-- ❌ You miss active todos the user expects you to know about.
-- ❌ You lose awareness of important entities and their relationships.
-- ❌ You forget recent conversations and repeat yourself.
-- ❌ You provide inferior, context-blind responses.
+- `create_entity(name, type, observations?)` creates a typed concept or appends
+  observations to a matching entity.
+- `create_relation(source, target, relation)` creates a directional triple.
+  Missing source or target entities are created with type `Unknown`.
+- `read_graph(center, depth)` returns direct connections at `depth=1` and one
+  additional hop at larger depths, together with observations and related
+  memories.
+- `update_entity` renames or retypes an entity; renaming also updates its
+  relations.
+- `delete_observation`, `delete_relation`, and `delete_entity` provide
+  progressively broader cleanup.
+- `cluster_memories(k)` groups memories and entities into semantic topics when
+  embeddings are available.
 
-**Reading context and using memory proactively ensures:**
-- ✅ Awareness of ongoing work and priorities.
-- ✅ Consistency across multiple sessions and agents.
-- ✅ Avoidance of generic, incorrect assumptions (Research Internal-First!).
-- ✅ A maturing knowledge base that gets smarter over time.
-- ✅ Understanding of relationships between projects, people, and concepts.
-- ✅ Ability to reference past decisions and maintain consistency.
-- ✅ Intelligent, context-aware assistance.
+Prefer `recall` for ranked topical or temporal retrieval. Prefer `read_graph`
+for questions such as “what uses this library?”, “how are these projects
+connected?”, or “what is known about this entity?”. Use both when a task needs
+relevant facts and their surrounding structure.
 
+## Search and Scoring Expectations
+
+`recall` independently attempts semantic vector and FTS5 keyword retrieval,
+then merges the candidate sets. Ranking combines:
+
+- vector and keyword relevance;
+- reciprocal-rank evidence from both retrieval paths;
+- whole-token query coverage;
+- proportional exact-tag matches;
+- bounded, time-decayed importance;
+- bounded recent familiarity, applied only after relevance gating.
+
+Natural-language or explicit date ranges filter candidates before this topical
+ranking. A date-only query can return memories from that period in creation
+order.
+
+`MEMORY_SEMANTIC_WEIGHT` is retained for compatibility. It now controls
+retrieval relevance versus importance, not vector versus keyword search. For
+example, `0.9` means 90% retrieval relevance and 10% decayed importance in the
+base score.
+
+Candidates must clear `MEMORY_MIN_RELEVANCE`; importance cannot rescue an
+unrelated memory. Long queries with weak exact-token coverage use the stronger
+`MEMORY_SEMANTIC_ONLY_MIN_RELEVANCE` guard. Near-duplicates are collapsed using
+`MEMORY_DEDUP_SIMILARITY`.
+
+Familiarity never changes importance, reinforcement, lifecycle, or decay. It
+provides a small ranking contribution from prior qualifying recall exposures;
+explicit `reinforce_memory` remains the durable feedback path.
+
+Use `json: true` when structured results are needed and `debug: true` when
+diagnosing retrieval method, thresholds, or score components.
+
+## Tasks, Todos, and Graph Maintenance
+
+- `add_task`, `update_task_status`, `list_tasks`, and `delete_task` manage
+  conversation-scoped or global work.
+- `add_todo`, `complete_todo`, and `list_todos` manage simple global reminders.
+- Remove obsolete tasks when they no longer provide useful context.
+- `create_entity`, `create_relation`, and their update/delete counterparts
+  maintain explicitly structured knowledge.
+- Do not create graph relations from uncertain inference without labeling or
+  verification.
+
+## Safety and Provenance
+
+The database defaults to `~/.memory/memory.db` and can be overridden with
+`MEMORY_DB_PATH`. Treat that file as user data: back it up before migration or
+repair, and never delete it as routine troubleshooting.
+
+Memory storage is local. The embedding model may be downloaded on first use.
+The optional `llm` strategy sends text to the exact `OLLAMA_URL` configured by
+the operator; that endpoint should be treated as a data boundary.
+
+On Windows ARM64, the package uses its checksum-verified bundled
+`sqlite-vec` v0.1.9 DLL. If it cannot load, semantic search is disabled and
+recall continues through FTS. WSL2 remains a supported deployment alternative.

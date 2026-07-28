@@ -57,6 +57,7 @@ export class MemoryClusterer {
                 SELECT m.id, m.content, v.embedding
                 FROM vec_items v
                 JOIN memories m ON v.rowid = m.rowid
+                WHERE m.lifecycle_state = 'active'
             `).all();
         } catch (e) { console.warn("[Clusterer] Failed to fetch memories:", e); }
 

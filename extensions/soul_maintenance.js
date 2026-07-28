@@ -1,25 +1,27 @@
-import type { Database } from 'better-sqlite3';
-
 /**
  * SOUL_MAINTENANCE - Manages the biological lifecycle of memories
  * 
  * Logic:
  * - Start importance: 0.1
- * - Resilience: Usage slows decay -> Decay = (Age * Rate) / log2(Access + 2)
+ * - Resilience: Explicit reinforcement slows decay
  * - Immunization: Specific tags prevent decay entirely
- * - Negation: Frequent recall overcomes the decay
+ * - Passive recall never changes importance
  */
-export function handleSoulMaintenance(db: Database) {
+export function handleSoulMaintenance(db) {
     const startImportance = 0.1;
     const decayRatePerMonth = 0.05; // Base decay rate
     const maxBoost = 0.9;
-    const logBase = Math.log2(21); // Cap at ~20 accesses for full boost
+    const logBase = Math.log2(21); // Cap at ~20 explicit reinforcements
 
     // Immune tags
     const immuneTags = ['core', 'identity', 'value', 'principle'];
 
     // 1. Fetch all memories
-    const memories = db.prepare('SELECT id, created_at, access_count, tags, importance FROM memories').all() as any[];
+    const memories = db.prepare(`
+        SELECT id, created_at, last_reinforced_at, reinforcement_count,
+               tags, importance
+        FROM memories
+    `).all();
     
     const now = new Date();
     let updatedCount = 0;
@@ -30,8 +32,11 @@ export function handleSoulMaintenance(db: Database) {
     const transaction = db.transaction((mems) => {
         for (const m of mems) {
             // 0. Check Immunization
-            const tags = m.tags ? JSON.parse(m.tags) : [];
-            const isImmune = tags.some((t: string) => immuneTags.includes(t.toLowerCase()));
+            let tags = [];
+            try {
+                tags = m.tags ? JSON.parse(m.tags) : [];
+            } catch {}
+            const isImmune = tags.some((t) => immuneTags.includes(t.toLowerCase()));
             
             if (isImmune) {
                 immuneCount++;
@@ -43,17 +48,16 @@ export function handleSoulMaintenance(db: Database) {
                 continue; // Skip decay logic
             }
 
-            const created = new Date(m.created_at);
-            const diffTime = Math.abs(now.getTime() - created.getTime());
+            const anchor = new Date(m.last_reinforced_at || m.created_at);
+            const diffTime = Math.max(0, now.getTime() - anchor.getTime());
             const months = diffTime / (1000 * 60 * 60 * 24 * 30.44); // Average month length
             
-            // 1. Logarithmic Boost (Access) - Increases base importance
-            const boost = Math.min(maxBoost, (Math.log2(m.access_count + 1) / logBase) * maxBoost);
+            // 1. Only explicit reinforcement increases the lifecycle base.
+            const confirmedUses = Math.max(0, Math.min(20, m.reinforcement_count || 0));
+            const boost = Math.min(maxBoost, (Math.log2(confirmedUses + 1) / logBase) * maxBoost);
             
-            // 2. Resilient Decay - Usage slows down time
-            // If access_count is 0, divisor is log2(2) = 1 (Full decay)
-            // If access_count is 30, divisor is log2(32) = 5 (1/5th expected decay)
-            const resilienceFactor = Math.log2(m.access_count + 2);
+            // 2. Confirmed use slows decay, with bounded diminishing returns.
+            const resilienceFactor = Math.log2(confirmedUses + 2);
             const decay = (months * decayRatePerMonth) / resilienceFactor;
             
             // 3. Final calculation
@@ -79,14 +83,14 @@ export function handleSoulMaintenance(db: Database) {
         logic: {
             base: startImportance,
             decay_rate: `${decayRatePerMonth}/month (base)`,
-            resilience: "Decay / log2(Access + 2)",
+            resilience: "Decay / log2(Explicit reinforcement + 2)",
             immunization: immuneTags.join(', ')
         }
     };
 }
 
 // Startup Hook
-export function init(db: Database) {
+export function init(db) {
     console.error("[Soul] Running maintenance on startup...");
     const result = handleSoulMaintenance(db);
     console.error("[Soul] Maintenance result:", JSON.stringify(result.stats));
@@ -94,7 +98,7 @@ export function init(db: Database) {
 
 export const SOUL_MAINTENANCE_TOOL = {
     name: "soul_maintenance",
-    description: "Performs biological lifecycle management on memories. Processes 11-step decay and growth logic: memories start at 0.1 importance, grow logarithmically with recall, and decay linearly over time unless negated by active use.",
+    description: "Maintains memory lifecycle importance using explicit reinforcement, bounded decay, and immune tags. Passive recall has no effect.",
     inputSchema: {
         type: "object",
         properties: {}

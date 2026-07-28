@@ -1,15 +1,49 @@
 {
   "name": "@beledarian/mcp-local-memory",
-  "version": "1.1.0",
+  "version": "2.0.1",
   "description": "Local memory server for AI agents using SQLite and MCP",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Beledarian/mcp-local-memory.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Beledarian/mcp-local-memory/issues"
+  },
+  "homepage": "https://github.com/Beledarian/mcp-local-memory#readme",
+  "keywords": [
+    "mcp",
+    "memory",
+    "sqlite",
+    "semantic-search",
+    "knowledge-graph",
+    "ai-agents"
+  ],
   "main": "dist/index.js",
   "bin": {
     "mcp-local-memory": "dist/index.js",
     "memory": "dist/index.js"
   },
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "files": [
-    "dist/**/*",
-    "extensions/**/*",
+    "dist/**/*.js",
+    "vendor/sqlite-vec/README.md",
+    "vendor/sqlite-vec/LICENSE-MIT",
+    "vendor/sqlite-vec/LICENSE-APACHE",
+    "vendor/sqlite-vec/windows-arm64/vec0.dll",
+    "scripts/normalize-importance.mjs",
+    "scripts/smoke-live-mcp.mjs",
+    "scripts/build-sqlite-vec-windows-arm64.ps1",
+    "extensions/soul_maintenance.js",
+    "extensions/README.md",
+    "docs/detailed_prompt.md",
+    "docs/extended-guide.md",
+    "docs/example_instructions.md",
+    "docs/example_prompt.md",
+    "docs/image.png",
+    "CHANGELOG.md",
     "README.md",
     "LICENSE"
   ],
@@ -20,29 +54,37 @@
   "scripts": {
     "build": "tsc && shx chmod +x dist/index.js",
     "start": "node dist/index.js",
-    "test": "tsx tests/test_features.ts"
+    "test": "node scripts/run-tests.mjs",
+    "test:cli": "tsx scripts/verify_cli.ts",
+    "audit:recall": "tsx scripts/verify_recall.ts",
+    "normalize:importance": "node scripts/normalize-importance.mjs",
+    "smoke:mcp": "node scripts/smoke-live-mcp.mjs",
+    "prepack": "npm run build && npm test"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^0.6.0",
-    "@xenova/transformers": "^2.17.2",
+    "@huggingface/transformers": "^4.2.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^11.8.1",
     "chrono-node": "^2.9.0",
     "compromise": "^14.14.5",
     "fs-extra": "^11.3.3",
-    "sharp": "^0.34.5",
     "sqlite-vec": "^0.1.1",
-    "uuid": "^9.0.1",
+    "uuid": "^11.1.1",
     "zod": "^3.22.4",
     "yargs-parser": "^21.1.1"
   },
   "optionalDependencies": {
     "sqlite-vec-linux-arm64": "^0.1.7-alpha.2"
   },
+  "overrides": {
+    "adm-zip": "0.6.0",
+    "onnxruntime-node": "1.27.0",
+    "sharp": "0.35.3"
+  },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.9",
     "@types/fs-extra": "^11.0.4",
-    "@types/node": "^20.11.19",
-    "@types/uuid": "^9.0.8",
+    "@types/node": "^22.0.0",
     "shx": "^0.4.0",
     "tsx": "^4.7.1",
     "typescript": "^5.3.3"

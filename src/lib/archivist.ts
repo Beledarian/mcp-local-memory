@@ -27,6 +27,10 @@ export class CompositeArchivist implements Archivist {
 
 export class WorkerArchivist implements Archivist {
     private worker: Worker;
+    private pending = new Map<
+        string,
+        { resolve: () => void; reject: (error: Error) => void }
+    >();
 
     constructor(dbPath: string) {
         // Detect if we are in a TS environment (approximate check)
@@ -52,14 +56,39 @@ export class WorkerArchivist implements Archivist {
         
         this.worker = new Worker(finalPath, workerOptions);
         
-        this.worker.on('error', (err) => console.error("[WorkerArchivist] Worker Error:", err));
+        this.worker.on('message', (message: {
+            taskId?: string;
+            error?: string;
+        }) => {
+            if (!message.taskId) return;
+            const pending = this.pending.get(message.taskId);
+            if (!pending) return;
+            this.pending.delete(message.taskId);
+            if (message.error) {
+                pending.reject(new Error(message.error));
+            } else {
+                pending.resolve();
+            }
+        });
+        this.worker.on('error', (err) => {
+            console.error("[WorkerArchivist] Worker Error:", err);
+            for (const pending of this.pending.values()) pending.reject(err);
+            this.pending.clear();
+        });
         this.worker.on('exit', (code) => {
             if (code !== 0) console.error(`[WorkerArchivist] Worker stopped with exit code ${code}`);
+            const error = new Error(`Archivist worker exited with code ${code}`);
+            for (const pending of this.pending.values()) pending.reject(error);
+            this.pending.clear();
         });
     }
 
     async process(text: string, memoryId?: string): Promise<void> {
-        this.worker.postMessage({ text, memoryId });
+        const taskId = uuidv4();
+        return new Promise<void>((resolve, reject) => {
+            this.pending.set(taskId, { resolve, reject });
+            this.worker.postMessage({ taskId, text, memoryId });
+        });
     }
 }
 
@@ -91,6 +120,12 @@ export class NlpArchivist implements Archivist {
     // Pre-compile the transaction for performance/atomicity
     this.insertTransaction = this.db.transaction((data: any) => {
         const { memoryId, entities, relations, tags } = data;
+        if (
+            memoryId &&
+            !this.db.prepare('SELECT 1 FROM memories WHERE id = ?').get(memoryId)
+        ) {
+            return;
+        }
 
         // 1. Tags Update
         if (memoryId && tags.length > 0) {
@@ -124,6 +159,12 @@ export class NlpArchivist implements Archivist {
                 if (!existing) {
                     const id = uuidv4();
                     this.db.prepare('INSERT INTO entities (id, name, type, observations, importance) VALUES (?, ?, ?, ?, ?)').run(id, cleanName, e.type, '[]', 0.5);
+                    try {
+                        this.db.prepare(
+                            'UPDATE entities SET auto_generated = 1 WHERE id = ?'
+                        ).run(id);
+                    } catch {}
+                    existing = { id };
                     // Embeddings must be handled OUTSIDE the blocking transaction if they are async/slow?
                     // Actually, better-sqlite3 transactions are synchronous. We can't await inside.
                     // So we must gather IDs here and return them for embedding? 
@@ -131,6 +172,14 @@ export class NlpArchivist implements Archivist {
                     if (e.embedding) {
                         this.db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(id, e.embedding);
                     }
+                }
+                if (memoryId && existing?.id) {
+                    try {
+                        this.db.prepare(`
+                            INSERT OR IGNORE INTO memory_entities(memory_id, entity_id)
+                            VALUES (?, ?)
+                        `).run(memoryId, existing.id);
+                    } catch {}
                 }
              } catch (err: any) {
                  if (err.code !== 'SQLITE_CONSTRAINT_UNIQUE') console.error("[NlpArchivist] Entity Error:", err.message);
@@ -140,7 +189,31 @@ export class NlpArchivist implements Archivist {
         // 3. Relations
         for (const r of relations) {
             try {
-                this.db.prepare(`INSERT OR IGNORE INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(r.source, r.target, r.relation);
+                const existing = this.db.prepare(`
+                    SELECT 1 FROM relations
+                    WHERE source = ? AND target = ? AND relation = ?
+                `).get(r.source, r.target, r.relation);
+                if (!existing) {
+                    this.db.prepare(`
+                        INSERT INTO relations (source, target, relation)
+                        VALUES (?, ?, ?)
+                    `).run(r.source, r.target, r.relation);
+                    try {
+                        this.db.prepare(`
+                            UPDATE relations SET auto_generated = 1
+                            WHERE source = ? AND target = ? AND relation = ?
+                        `).run(r.source, r.target, r.relation);
+                    } catch {}
+                }
+                if (memoryId) {
+                    try {
+                        this.db.prepare(`
+                            INSERT OR IGNORE INTO memory_relations(
+                                memory_id, source, target, relation
+                            ) VALUES (?, ?, ?, ?)
+                        `).run(memoryId, r.source, r.target, r.relation);
+                    } catch {}
+                }
             } catch (e) {}
         }
     });
@@ -424,33 +497,103 @@ export class LlmArchivist implements Archivist {
         if (!response.ok) { console.error(`[LlmArchivist] LLM failed: ${response.statusText}`); return; }
         const data = await response.json();
         const json = JSON.parse(data.response); 
+        const sourceMemoryExists = () =>
+            !memoryId ||
+            Boolean(
+                this.db.prepare('SELECT 1 FROM memories WHERE id = ?')
+                    .get(memoryId),
+            );
+        if (!sourceMemoryExists()) {
+            return;
+        }
 
         // 1. Importance
         if (memoryId && typeof json.importance === 'number') {
-            try { this.db.prepare('UPDATE memories SET importance = ? WHERE id = ?').run(json.importance, memoryId); } catch(e){}
+            const boundedImportance = Math.min(1, Math.max(0, json.importance));
+            try { this.db.prepare('UPDATE memories SET importance = ? WHERE id = ?').run(boundedImportance, memoryId); } catch(e){}
         }
 
         // 2. Entities
         if (json.entities) {
             for (const e of json.entities) {
-                 try {
-                    const existing = this.db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(e.name) as any;
-                    if (existing) continue;
-
-                    const id = uuidv4();
-                    const imp = json.importance || 0.5;
-                    this.db.prepare(`INSERT INTO entities (id, name, type, observations, importance) VALUES (?, ?, ?, ?, ?)`).run(id, e.name, e.type, JSON.stringify(e.observations || []), imp);
-                    
-                    // Embed
-                    if (this.embedder) {
+                try {
+                    const existingBeforeEmbed = this.db.prepare(`
+                        SELECT id FROM entities
+                        WHERE levenshtein(name, ?) <= 2
+                        LIMIT 1
+                    `).get(e.name) as { id: string } | undefined;
+                    let embedded: Float32Array | undefined;
+                    if (!existingBeforeEmbed && this.embedder) {
                         try {
-                            const vec = await this.embedder(e.name + " " + e.type);
-                            const f32 = new Float32Array(vec);
-                            this.db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(id, Buffer.from(f32.buffer));
-                        } catch(err) { console.warn("[LlmArchivist] Embed failed:", err); }
+                            const vec = await this.embedder(
+                                e.name + " " + e.type,
+                            );
+                            embedded = new Float32Array(vec);
+                        } catch (err) {
+                            console.warn("[LlmArchivist] Embed failed:", err);
+                        }
                     }
 
-                 } catch (err) {}
+                    const attachEntity = this.db.transaction(() => {
+                        if (!sourceMemoryExists()) return false;
+
+                        let existing = this.db.prepare(`
+                            SELECT id, name FROM entities
+                            WHERE levenshtein(name, ?) <= 2
+                            LIMIT 1
+                        `).get(e.name) as
+                            | { id: string; name: string }
+                            | undefined;
+                        if (!existing) {
+                            const id = uuidv4();
+                            const imp = typeof json.importance === 'number'
+                                ? Math.min(1, Math.max(0, json.importance))
+                                : 0.5;
+                            this.db.prepare(`
+                                INSERT INTO entities(
+                                    id, name, type, observations, importance,
+                                    auto_generated
+                                ) VALUES (?, ?, ?, ?, ?, 1)
+                            `).run(
+                                id,
+                                e.name,
+                                e.type,
+                                JSON.stringify(e.observations || []),
+                                imp,
+                            );
+                            existing = { id, name: e.name };
+
+                            if (embedded) {
+                                try {
+                                    this.db.prepare(`
+                                        INSERT INTO vec_entities(rowid, embedding)
+                                        SELECT rowid, ? FROM entities
+                                        WHERE id = ?
+                                    `).run(
+                                        Buffer.from(embedded.buffer),
+                                        id,
+                                    );
+                                } catch (err) {
+                                    console.warn(
+                                        "[LlmArchivist] Embed insert failed:",
+                                        err,
+                                    );
+                                }
+                            }
+                        }
+                        if (memoryId && existing?.id) {
+                            this.db.prepare(`
+                                INSERT OR IGNORE INTO memory_entities(
+                                    memory_id, entity_id
+                                ) VALUES (?, ?)
+                            `).run(memoryId, existing.id);
+                        }
+                        return true;
+                    });
+                    if (!attachEntity.immediate()) return;
+                } catch (err) {
+                    console.warn("[LlmArchivist] Entity write failed:", err);
+                }
             }
         }
 
@@ -469,14 +612,53 @@ export class LlmArchivist implements Archivist {
         // 4. Relations
         if (json.relations) {
             for (const r of json.relations) {
-                 // Ensure Stubs
-                 [r.source, r.target].forEach(name => {
-                     try {
-                        const id = uuidv4();
-                        this.db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, 'Unknown', '[]');
-                     } catch(e) {}
-                 });
-                 try { this.db.prepare(`INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(r.source, r.target, r.relation); } catch(e) {}
+                try {
+                    const attachRelation = this.db.transaction(() => {
+                        if (!sourceMemoryExists()) return false;
+
+                        for (const name of [r.source, r.target]) {
+                            this.db.prepare(`
+                                INSERT OR IGNORE INTO entities(
+                                    id, name, type, observations, auto_generated
+                                ) VALUES (?, ?, 'Unknown', '[]', 1)
+                            `).run(uuidv4(), name);
+                            if (memoryId) {
+                                const entity = this.db.prepare(
+                                    'SELECT id FROM entities WHERE name = ?',
+                                ).get(name) as { id: string } | undefined;
+                                if (entity?.id) {
+                                    this.db.prepare(`
+                                        INSERT OR IGNORE INTO memory_entities(
+                                            memory_id, entity_id
+                                        ) VALUES (?, ?)
+                                    `).run(memoryId, entity.id);
+                                }
+                            }
+                        }
+
+                        this.db.prepare(`
+                            INSERT OR IGNORE INTO relations(
+                                source, target, relation, auto_generated
+                            ) VALUES (?, ?, ?, 1)
+                        `).run(r.source, r.target, r.relation);
+                        if (memoryId) {
+                            this.db.prepare(`
+                                INSERT OR IGNORE INTO memory_relations(
+                                    memory_id, source, target, relation
+                                ) VALUES (?, ?, ?, ?)
+                            `).run(
+                                memoryId,
+                                r.source,
+                                r.target,
+                                r.relation,
+                            );
+                        }
+                        return true;
+                    });
+                    if (!attachRelation.immediate()) return;
+                } catch (err) {
+                    console.warn("[LlmArchivist] Relation write failed:", err);
+                }
             }
         }
 
@@ -495,7 +677,15 @@ export const getArchivist = (db: Database, embedder?: EmbedderFn): Archivist => 
     const strategies = strategyEnv.split(',').map(s => s.trim().toLowerCase());
     const archivists: Archivist[] = [];
 
-    if (strategies.includes('nlp')) archivists.push(new NlpArchivist(db, embedder));
+    if (strategies.includes('nlp')) {
+        archivists.push(
+            new NlpArchivist(
+                db,
+                embedder,
+                process.env.ARCHIVIST_LANGUAGE || 'en',
+            ),
+        );
+    }
     if (strategies.includes('llm')) archivists.push(new LlmArchivist(db, process.env.OLLAMA_URL, embedder));
     
     if (archivists.length === 0) {

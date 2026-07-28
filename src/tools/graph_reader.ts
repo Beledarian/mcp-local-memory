@@ -70,12 +70,17 @@ export const handleReadGraph = (db: Database, args: any) => {
         relatedMemories = db.prepare(`
             SELECT content, importance, tags 
             FROM memories 
-            WHERE id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?) 
+            WHERE lifecycle_state = 'active'
+              AND id IN (SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?)
             ORDER BY importance DESC LIMIT 5
         `).all(`"${centerEntity.name}"`) as any[];
 
         if (relatedMemories.length === 0) {
-             relatedMemories = db.prepare(`SELECT content, importance, tags FROM memories WHERE content LIKE ? ORDER BY importance DESC LIMIT 5`).all(`%${centerEntity.name}%`) as any[];
+             relatedMemories = db.prepare(`
+                 SELECT content, importance, tags FROM memories
+                 WHERE lifecycle_state = 'active' AND content LIKE ?
+                 ORDER BY importance DESC LIMIT 5
+             `).all(`%${centerEntity.name}%`) as any[];
         }
         
     } else {

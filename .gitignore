@@ -8,6 +8,8 @@ test.json
 test_tags.db
 test_wsl.sh
 sqlite-vec/
+!vendor/sqlite-vec/
+!vendor/sqlite-vec/**
 
 # Clutter & Diagnostics
 debug_sqlite_math.cjs

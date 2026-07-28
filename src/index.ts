@@ -21,6 +21,7 @@ import {
   LIST_RECENT_MEMORIES_TOOL,
   READ_GRAPH_TOOL,
   RECALL_TOOL,
+  REINFORCE_MEMORY_TOOL,
   REMEMBER_FACT_TOOL,
   REMEMBER_FACTS_TOOL,
   CLUSTER_MEMORIES_TOOL,
@@ -42,6 +43,7 @@ import { getArchivist } from "./lib/archivist.js";
 import * as taskHandlers from './tools/task_handlers.js';
 import { loadExtensions } from "./lib/extensions.js";
 import * as core from './tools/core.js';
+import { scoreVectorRecall } from './lib/scoring.js';
 
 // Load extensions
 const EXTENSIONS_PATH = process.env.EXTENSIONS_PATH;
@@ -91,38 +93,9 @@ const levenshtein = (a: string, b: string): number => {
 };
 db.function('levenshtein', levenshtein);
 
-// Scoring function for Temporal Decay + Semantic Similarity
-const decay = (importance: number, last_accessed: string | null, access_count: number, distance: number): number => {
-    // 1. Config
-    const halfLife = parseFloat(process.env.MEMORY_HALF_LIFE_WEEKS || '4');
-    const consolidation = parseFloat(process.env.MEMORY_CONSOLIDATION_FACTOR || '1.0');
-    const semanticWeight = parseFloat(process.env.MEMORY_SEMANTIC_WEIGHT || '0.7');
-    const importanceWeight = 1.0 - semanticWeight;
-    
-    // 2. Time Delta (Weeks)
-    const now = new Date();
-    const accessed = last_accessed ? new Date(last_accessed) : new Date(); // If null, assume fresh
-    const diffTime = Math.abs(now.getTime() - accessed.getTime());
-    const weeks = diffTime / (1000 * 60 * 60 * 24 * 7);
-
-    // 3. Stability (Consolidation)
-    // Stability increases with access count. 
-    // log2(1) = 0, log2(2) = 1, log2(4) = 2...
-    const stability = halfLife * (1 + (consolidation * Math.log2(access_count + 1)));
-    
-    // 4. Decayed Importance (Exponential Half-Life)
-    const decayedImportance = (importance || 0.5) * Math.pow(0.5, weeks / stability);
-    
-    // 5. Semantic Similarity
-    // distance is cosine distance (0=identical, 2=opposite). verify sqlite-vec range.
-    // Assuming 0 to 2. Similarity = 1 - (distance / 2)? Or usually just 1 - distance.
-    // Let's assume standard 1 - dist.
-    const similarity = 1.0 - distance;
-    
-    // 6. Final Score (Weighted Mix)
-    return (similarity * semanticWeight) + (decayedImportance * importanceWeight);
-};
-db.function('ranked_score', decay);
+// Retained for extension/backward compatibility. Core recall now fuses vector
+// and keyword candidates in TypeScript using the same bounded scorer.
+db.function('ranked_score', scoreVectorRecall);
 
 initSchema(db);
 
@@ -136,7 +109,7 @@ const archivist = getArchivist(db, async (text) => {
 const server = new Server(
   {
     name: "mcp-local-memory",
-    version: "0.1.0",
+    version: "2.0.0",
   },
   {
     capabilities: {
@@ -321,6 +294,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   const tools = [
     REMEMBER_FACT_TOOL,
     RECALL_TOOL,
+    REINFORCE_MEMORY_TOOL,
     FORGET_TOOL,
     LIST_RECENT_MEMORIES_TOOL,
     EXPORT_MEMORIES_TOOL,
@@ -374,6 +348,7 @@ const toolSchemas: Record<string, any> = {
   "remember_fact": schemas.RememberFactArgsSchema,
   "remember_facts": schemas.RememberFactsArgsSchema,
   "recall": schemas.RecallArgsSchema,
+  "reinforce_memory": schemas.ReinforceMemoryArgsSchema,
   "forget": schemas.ForgetArgsSchema,
   "list_recent_memories": schemas.ListRecentMemoriesArgsSchema,
   "export_memories": schemas.ExportMemoriesArgsSchema,
@@ -437,6 +412,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "recall": {
         return await core.handleRecall(db, embedder, args);
+      }
+
+      case "reinforce_memory": {
+        return core.handleReinforceMemory(db, args);
       }
 
       case "forget": {

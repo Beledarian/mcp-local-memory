@@ -1,35 +1,27 @@
 
-import { Database } from 'better-sqlite3';
+import assert from 'node:assert/strict';
 import DatabaseConstructor from 'better-sqlite3';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { handleCLI } from '../src/tools/cli.js';
+import { initSchema } from '../src/db/schema.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Mock DB path - assume running from root
-const DB_PATH = path.resolve(__dirname, '../memory.db'); // Adjust if needed
-console.log("Using DB:", DB_PATH);
-
-const db = new DatabaseConstructor(DB_PATH);
+const db = new DatabaseConstructor(':memory:');
+db.function('levenshtein', (left: unknown, right: unknown) =>
+    String(left).localeCompare(String(right)) === 0 ? 0 : 99
+);
+initSchema(db);
 
 // Mock Embedder/Archivist (we just want to test CLI routing logic mostly)
 const mockEmbedder = { embed: async (t: string) => new Array(384).fill(0.1) };
 const mockArchivist = { process: async (t: string, id: string) => console.log(`[MockArchivist] Processed ${id}`) };
 
-async function run(cmd: string) {
+async function run(cmd: string): Promise<string> {
     console.log(`\n>>> Running: "${cmd}"`);
-    try {
-        const result = await handleCLI(db, mockEmbedder, mockArchivist, cmd);
-        if (result.isError) {
-             console.error("ERROR:", result.content[0].text);
-        } else {
-             console.log("SUCCESS:", result.content[0].text);
-        }
-    } catch (e: any) {
-        console.error("EXCEPTION:", e.message);
-    }
+    const result = await handleCLI(db, mockEmbedder, mockArchivist, cmd);
+    assert.equal(result.isError, undefined, result.content?.[0]?.text);
+    assert.ok(Array.isArray(result.content), 'CLI result must contain MCP content');
+    const text = result.content[0].text;
+    console.log("SUCCESS:", text);
+    return text;
 }
 
 async function main() {
@@ -38,20 +30,25 @@ async function main() {
 
     // 2. Generic Task Flow
     await run('task add "Test Task from Verify Script" --section testing');
-    await run('task list --section testing');
+    assert.match(await run('task list --section testing'), /Test Task from Verify Script/);
     
     // 3. Close by Name
     await run('task done "Test Task from Verify Script"');
     
     // 4. Verify Closed
-    await run('task list --section testing');
+    assert.doesNotMatch(await run('task list --status pending'), /Test Task from Verify Script/);
 
     // 5. Todo Flow
     await run('todo add "Buy Milk"');
     await run('todo done "Milk"');
     
     // 6. Entity
-    await run('entity create "TestEntity" --type "Test"');
+    assert.match(await run('entity create "TestEntity" --type "Test"'), /Created entity/);
 }
 
-main();
+main()
+    .catch((error) => {
+        console.error(error);
+        process.exitCode = 1;
+    })
+    .finally(() => db.close());
