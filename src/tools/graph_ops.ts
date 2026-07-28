@@ -14,6 +14,9 @@ export async function handleCreateEntity(db: Database, args: any, embedder?: any
     let message = "";
 
     if (existing) {
+         db.prepare(
+             "UPDATE entities SET auto_generated = 0 WHERE id = ?",
+         ).run(existing.id);
          message = `Entity '${name}' already exists (as '${existing.name}').`;
          if (observations.length > 0) {
              const insertObs = db.prepare("INSERT INTO entity_observations (entity_id, content) VALUES (?, ?)");
@@ -62,27 +65,57 @@ export function handleCreateRelation(db: Database, args: any) {
     const target = args?.target as string;
     const relation = args?.relation as string;
 
-    const ensureEntity = (name: string) => {
-        try {
+    const createRelation = db.transaction(() => {
+        const ensureManualEntity = (name: string) => {
+            const existing = db.prepare(
+                "SELECT id FROM entities WHERE name = ?",
+            ).get(name) as { id: string } | undefined;
+            if (existing) {
+                db.prepare(
+                    "UPDATE entities SET auto_generated = 0 WHERE id = ?",
+                ).run(existing.id);
+                return;
+            }
             const id = uuidv4();
-            db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, "Unknown", "[]");
-        } catch (ignored) {} 
-    };
-
-    ensureEntity(source);
-    ensureEntity(target);
-
-    try {
-        db.prepare(`INSERT INTO relations (source, target, relation) VALUES (?, ?, ?)`).run(source, target, relation);
-        return {
-            content: [{ type: "text", text: `Created relation: ${source} --[${relation}]--> ${target}` }]
+            db.prepare(`
+                INSERT INTO entities(
+                    id, name, type, observations, auto_generated
+                ) VALUES (?, ?, 'Unknown', '[]', 0)
+            `).run(id, name);
         };
-    } catch (error: any) {
-        if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
-             return { content: [{ type: "text", text: `Relation already exists.` }] };
+
+        ensureManualEntity(source);
+        ensureManualEntity(target);
+
+        const existingRelation = db.prepare(`
+            SELECT 1 FROM relations
+            WHERE source = ? AND target = ? AND relation = ?
+        `).get(source, target, relation);
+        if (existingRelation) {
+            db.prepare(`
+                UPDATE relations
+                SET auto_generated = 0
+                WHERE source = ? AND target = ? AND relation = ?
+            `).run(source, target, relation);
+            return false;
         }
-        throw error;
-    }
+        db.prepare(`
+            INSERT INTO relations(
+                source, target, relation, auto_generated
+            ) VALUES (?, ?, ?, 0)
+        `).run(source, target, relation);
+        return true;
+    });
+
+    const created = createRelation.immediate();
+    return {
+        content: [{
+            type: "text",
+            text: created
+                ? `Created relation: ${source} --[${relation}]--> ${target}`
+                : "Relation already exists and is now manually maintained.",
+        }],
+    };
 }
 
 export function handleDeleteRelation(db: Database, args: any) {

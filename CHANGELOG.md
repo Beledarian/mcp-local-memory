@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-07-29
+
+### Fixed
+
+- Prevented asynchronous LLM enrichment from creating orphan generated
+  entities or relations after their source memory is forgotten. Post-embedding
+  graph writes now recheck and attach provenance inside an immediate
+  transaction.
+- Explicitly creating an existing generated entity or relation now marks it as
+  manually maintained, so forgetting the originating memory does not delete
+  deliberately preserved graph knowledge.
+
+### Added
+
+- Added regression coverage for LLM enrichment racing with `forget` and for
+  manual reaffirmation of generated graph knowledge.
+- Added Node.js 22 GitHub Actions gates on Linux, Windows, and macOS.
+
 ## [2.0.0] - 2026-07-28
 
 ### Breaking changes
@@ -109,4 +127,5 @@ All notable changes to this project are documented here. The format is based on
   `--apply --backup <new-path>` arguments.
 - WSL users should place scoring variables inside the Linux command environment;
   Windows-side MCP environment entries may not reach the Linux process.
+[2.0.1]: https://github.com/Beledarian/mcp-local-memory/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/Beledarian/mcp-local-memory/compare/v1.1.0...v2.0.0

@@ -497,10 +497,13 @@ export class LlmArchivist implements Archivist {
         if (!response.ok) { console.error(`[LlmArchivist] LLM failed: ${response.statusText}`); return; }
         const data = await response.json();
         const json = JSON.parse(data.response); 
-        if (
-            memoryId &&
-            !this.db.prepare('SELECT 1 FROM memories WHERE id = ?').get(memoryId)
-        ) {
+        const sourceMemoryExists = () =>
+            !memoryId ||
+            Boolean(
+                this.db.prepare('SELECT 1 FROM memories WHERE id = ?')
+                    .get(memoryId),
+            );
+        if (!sourceMemoryExists()) {
             return;
         }
 
@@ -513,43 +516,84 @@ export class LlmArchivist implements Archivist {
         // 2. Entities
         if (json.entities) {
             for (const e of json.entities) {
-                 try {
-                    let existing = this.db.prepare(`SELECT id, name FROM entities WHERE levenshtein(name, ?) <= 2 LIMIT 1`).get(e.name) as any;
-                    if (!existing) {
-                        const id = uuidv4();
-                        const imp = typeof json.importance === 'number'
-                            ? Math.min(1, Math.max(0, json.importance))
-                            : 0.5;
-                        this.db.prepare(`INSERT INTO entities (id, name, type, observations, importance) VALUES (?, ?, ?, ?, ?)`).run(id, e.name, e.type, JSON.stringify(e.observations || []), imp);
+                try {
+                    const existingBeforeEmbed = this.db.prepare(`
+                        SELECT id FROM entities
+                        WHERE levenshtein(name, ?) <= 2
+                        LIMIT 1
+                    `).get(e.name) as { id: string } | undefined;
+                    let embedded: Float32Array | undefined;
+                    if (!existingBeforeEmbed && this.embedder) {
                         try {
-                            this.db.prepare(
-                                'UPDATE entities SET auto_generated = 1 WHERE id = ?'
-                            ).run(id);
-                        } catch {}
-                        existing = { id, name: e.name };
-                    
-                        // Embed
-                        if (this.embedder) {
-                            try {
-                                const vec = await this.embedder(e.name + " " + e.type);
-                                const f32 = new Float32Array(vec);
-                                this.db.prepare(`
-                                    INSERT INTO vec_entities (rowid, embedding)
-                                    SELECT rowid, ? FROM entities WHERE id = ?
-                                `).run(Buffer.from(f32.buffer), id);
-                            } catch(err) { console.warn("[LlmArchivist] Embed failed:", err); }
+                            const vec = await this.embedder(
+                                e.name + " " + e.type,
+                            );
+                            embedded = new Float32Array(vec);
+                        } catch (err) {
+                            console.warn("[LlmArchivist] Embed failed:", err);
                         }
                     }
-                    if (memoryId && existing?.id) {
-                        try {
-                            this.db.prepare(`
-                                INSERT OR IGNORE INTO memory_entities(memory_id, entity_id)
-                                VALUES (?, ?)
-                            `).run(memoryId, existing.id);
-                        } catch {}
-                    }
 
-                 } catch (err) {}
+                    const attachEntity = this.db.transaction(() => {
+                        if (!sourceMemoryExists()) return false;
+
+                        let existing = this.db.prepare(`
+                            SELECT id, name FROM entities
+                            WHERE levenshtein(name, ?) <= 2
+                            LIMIT 1
+                        `).get(e.name) as
+                            | { id: string; name: string }
+                            | undefined;
+                        if (!existing) {
+                            const id = uuidv4();
+                            const imp = typeof json.importance === 'number'
+                                ? Math.min(1, Math.max(0, json.importance))
+                                : 0.5;
+                            this.db.prepare(`
+                                INSERT INTO entities(
+                                    id, name, type, observations, importance,
+                                    auto_generated
+                                ) VALUES (?, ?, ?, ?, ?, 1)
+                            `).run(
+                                id,
+                                e.name,
+                                e.type,
+                                JSON.stringify(e.observations || []),
+                                imp,
+                            );
+                            existing = { id, name: e.name };
+
+                            if (embedded) {
+                                try {
+                                    this.db.prepare(`
+                                        INSERT INTO vec_entities(rowid, embedding)
+                                        SELECT rowid, ? FROM entities
+                                        WHERE id = ?
+                                    `).run(
+                                        Buffer.from(embedded.buffer),
+                                        id,
+                                    );
+                                } catch (err) {
+                                    console.warn(
+                                        "[LlmArchivist] Embed insert failed:",
+                                        err,
+                                    );
+                                }
+                            }
+                        }
+                        if (memoryId && existing?.id) {
+                            this.db.prepare(`
+                                INSERT OR IGNORE INTO memory_entities(
+                                    memory_id, entity_id
+                                ) VALUES (?, ?)
+                            `).run(memoryId, existing.id);
+                        }
+                        return true;
+                    });
+                    if (!attachEntity.immediate()) return;
+                } catch (err) {
+                    console.warn("[LlmArchivist] Entity write failed:", err);
+                }
             }
         }
 
@@ -568,56 +612,53 @@ export class LlmArchivist implements Archivist {
         // 4. Relations
         if (json.relations) {
             for (const r of json.relations) {
-                 // Ensure Stubs
-                 [r.source, r.target].forEach(name => {
-                     try {
-                        const id = uuidv4();
-                        this.db.prepare(`INSERT INTO entities (id, name, type, observations) VALUES (?, ?, ?, ?)`).run(id, name, 'Unknown', '[]');
-                        try {
-                            this.db.prepare(
-                                'UPDATE entities SET auto_generated = 1 WHERE id = ?'
-                            ).run(id);
-                        } catch {}
-                     } catch(e) {}
-                     if (memoryId) {
-                        try {
-                            const entity = this.db.prepare(
-                                'SELECT id FROM entities WHERE name = ?'
-                            ).get(name) as any;
-                            if (entity?.id) {
-                                this.db.prepare(`
-                                    INSERT OR IGNORE INTO memory_entities(memory_id, entity_id)
-                                    VALUES (?, ?)
-                                `).run(memoryId, entity.id);
-                            }
-                        } catch {}
-                     }
-                 });
-                 try {
-                    const existingRelation = this.db.prepare(`
-                        SELECT 1 FROM relations
-                        WHERE source = ? AND target = ? AND relation = ?
-                    `).get(r.source, r.target, r.relation);
-                    if (!existingRelation) {
-                        this.db.prepare(`
-                            INSERT INTO relations (source, target, relation)
-                            VALUES (?, ?, ?)
-                        `).run(r.source, r.target, r.relation);
-                        try {
+                try {
+                    const attachRelation = this.db.transaction(() => {
+                        if (!sourceMemoryExists()) return false;
+
+                        for (const name of [r.source, r.target]) {
                             this.db.prepare(`
-                                UPDATE relations SET auto_generated = 1
-                                WHERE source = ? AND target = ? AND relation = ?
-                            `).run(r.source, r.target, r.relation);
-                        } catch {}
-                    }
-                    if (memoryId) {
+                                INSERT OR IGNORE INTO entities(
+                                    id, name, type, observations, auto_generated
+                                ) VALUES (?, ?, 'Unknown', '[]', 1)
+                            `).run(uuidv4(), name);
+                            if (memoryId) {
+                                const entity = this.db.prepare(
+                                    'SELECT id FROM entities WHERE name = ?',
+                                ).get(name) as { id: string } | undefined;
+                                if (entity?.id) {
+                                    this.db.prepare(`
+                                        INSERT OR IGNORE INTO memory_entities(
+                                            memory_id, entity_id
+                                        ) VALUES (?, ?)
+                                    `).run(memoryId, entity.id);
+                                }
+                            }
+                        }
+
                         this.db.prepare(`
-                            INSERT OR IGNORE INTO memory_relations(
-                                memory_id, source, target, relation
-                            ) VALUES (?, ?, ?, ?)
-                        `).run(memoryId, r.source, r.target, r.relation);
-                    }
-                 } catch(e) {}
+                            INSERT OR IGNORE INTO relations(
+                                source, target, relation, auto_generated
+                            ) VALUES (?, ?, ?, 1)
+                        `).run(r.source, r.target, r.relation);
+                        if (memoryId) {
+                            this.db.prepare(`
+                                INSERT OR IGNORE INTO memory_relations(
+                                    memory_id, source, target, relation
+                                ) VALUES (?, ?, ?, ?)
+                            `).run(
+                                memoryId,
+                                r.source,
+                                r.target,
+                                r.relation,
+                            );
+                        }
+                        return true;
+                    });
+                    if (!attachRelation.immediate()) return;
+                } catch (err) {
+                    console.warn("[LlmArchivist] Relation write failed:", err);
+                }
             }
         }
 

@@ -769,7 +769,7 @@ export const handleForget = (db: Database, args: any) => {
                 }
             }
         });
-        tx();
+        tx.immediate();
         return { content: [{ type: "text", text: `Memory ${memory_id} forgotten.` }] };
     }
     return { content: [{ type: "text", text: `Memory ${memory_id} not found.` }], isError: true };
