@@ -77,7 +77,8 @@ export class Consolidator {
 
         // Fetch recent memories for deduplication
         const recentMemories = this.db.prepare(`
-            SELECT content FROM memories 
+            SELECT content FROM memories
+            WHERE lifecycle_state = 'active'
             ORDER BY created_at DESC 
             LIMIT 10
         `).all() as any[];
@@ -152,6 +153,7 @@ Return JSON:
                 SELECT m.content, v.embedding
                 FROM vec_items v
                 JOIN memories m ON v.rowid = m.rowid
+                WHERE m.lifecycle_state = 'active'
                 ORDER BY m.created_at DESC
                 LIMIT 20
             `).all() as any[];

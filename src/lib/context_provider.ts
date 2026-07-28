@@ -27,7 +27,11 @@ export const getCurrentContext = (db: Database, config: ContextConfig = getConfi
     const todos = db.prepare(`SELECT * FROM todos WHERE status = 'pending' ORDER BY created_at DESC LIMIT ?`).all(config.todoLimit) as any[];
 
     // 1. Recent Memories
-    const recentMemories = db.prepare(`SELECT content, created_at FROM memories ORDER BY created_at DESC LIMIT ?`).all(config.maxMemories) as any[];
+    const recentMemories = db.prepare(`
+        SELECT content, created_at FROM memories
+        WHERE lifecycle_state = 'active'
+        ORDER BY created_at DESC LIMIT ?
+    `).all(config.maxMemories) as any[];
     
     // 2. Active Entities
     let importantEntities: any[] = [];
@@ -189,7 +193,8 @@ export const getTurnContext = (db: Database, config: ContextConfig = getConfig()
     }
 
     const recentMemories = db.prepare(`
-        SELECT content, created_at FROM memories 
+        SELECT content, created_at FROM memories
+        WHERE lifecycle_state = 'active'
         ORDER BY created_at DESC LIMIT ?
     `).all(config.maxMemories) as any[];
     

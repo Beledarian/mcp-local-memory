@@ -2,7 +2,7 @@
 import { Database } from 'better-sqlite3';
 import { v4 as uuidv4 } from 'uuid';
 
-export function handleCreateEntity(db: Database, args: any, embedder?: any) {
+export async function handleCreateEntity(db: Database, args: any, embedder?: any) {
     const name = args?.name as string;
     const type = args?.type as string;
     const observations = (args?.observations as string[]) || [];
@@ -37,12 +37,16 @@ export function handleCreateEntity(db: Database, args: any, embedder?: any) {
          
          // Generate Entity Embedding
          if (embedder) {
-            embedder.embed(name + " " + type).then((vec: any) => {
+            try {
+               const vec = await embedder.embed(name + " " + type);
                const float32 = new Float32Array(vec);
-               try {
-                   db.prepare('INSERT INTO vec_entities (rowid, embedding) VALUES ((SELECT rowid FROM entities WHERE id = ?), ?)').run(entityId, Buffer.from(float32.buffer));
-               } catch (e) { console.warn("Entity embedding insert failed:", e); }
-            }).catch((e: any) => console.error("Embedding generation failed:", e));
+               db.prepare(`
+                   INSERT INTO vec_entities (rowid, embedding)
+                   SELECT rowid, ? FROM entities WHERE id = ?
+               `).run(Buffer.from(float32.buffer), entityId);
+            } catch (e) {
+               console.warn("Entity embedding insert failed:", e);
+            }
          }
 
          message = `Created entity '${name}' of type '${type}'.`;
@@ -125,7 +129,7 @@ export function handleDeleteEntity(db: Database, args: any) {
     };
 }
 
-export function handleUpdateEntity(db: Database, args: any, embedder?: any) {
+export async function handleUpdateEntity(db: Database, args: any, embedder?: any) {
     const currentName = args?.current_name as string;
     const newName = args?.new_name as string | undefined;
     const newType = args?.new_type as string | undefined;
@@ -155,25 +159,24 @@ export function handleUpdateEntity(db: Database, args: any, embedder?: any) {
                 db.prepare("UPDATE relations SET source = ? WHERE source = ?").run(newName, currentName);
                 db.prepare("UPDATE relations SET target = ? WHERE target = ?").run(newName, currentName);
             }
-            
-            // Re-embed if necessary
-            if (embedder && ((newName && newName !== currentName) || (newType && newType !== entity.type))) {
-                 const finalName = newName || currentName;
-                 const finalType = newType || entity.type;
-                 
-                 embedder.embed(finalName + " " + finalType).then((vec: any) => {
-                     const float32 = new Float32Array(vec);
-                     try {
-                         const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
-                         if (rowid) {
-                             db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
-                             db.prepare("INSERT INTO vec_entities (rowid, embedding) VALUES (?, ?)").run(rowid.rowid, Buffer.from(float32.buffer));
-                         }
-                     } catch(e) { console.error("Re-embedding failed", e); }
-                }).catch((e: any) => console.error("Re-embedding generation failed", e));
-            }
         });
         tx();
+
+        if (embedder && ((newName && newName !== currentName) || (newType && newType !== entity.type))) {
+            const finalName = newName || currentName;
+            const finalType = newType || entity.type;
+            try {
+                const vec = await embedder.embed(finalName + " " + finalType);
+                const float32 = new Float32Array(vec);
+                const rowid = db.prepare("SELECT rowid FROM entities WHERE id = ?").get(entity.id) as any;
+                if (rowid) {
+                    db.prepare("DELETE FROM vec_entities WHERE rowid = ?").run(rowid.rowid);
+                    db.prepare("INSERT INTO vec_entities (rowid, embedding) VALUES (?, ?)").run(rowid.rowid, Buffer.from(float32.buffer));
+                }
+            } catch(e) {
+                console.error("Re-embedding failed", e);
+            }
+        }
         
         return {
             content: [{ type: "text", text: `Updated entity '${currentName}'` }]

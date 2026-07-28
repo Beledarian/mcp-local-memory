@@ -1,4 +1,4 @@
-// import { pipeline } from '@xenova/transformers';
+// import { pipeline } from '@huggingface/transformers';
 
 export interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;
@@ -18,7 +18,7 @@ export class LocalEmbedder implements EmbeddingProvider {
     if (!this.pipe) {
       // quantized: true is the default, loads ~23MB model
       // Dynamic import to avoid sharp dependency if not used or broken
-      const { pipeline } = await import('@xenova/transformers');
+      const { pipeline } = await import('@huggingface/transformers');
       this.pipe = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
     }
   }

@@ -14,12 +14,20 @@ const archivist = getArchivist(db, async (text) => {
 });
 
 if (parentPort) {
-    parentPort.on('message', async (task: { text: string, memoryId?: string }) => {
+    parentPort.on('message', async (task: {
+        taskId: string;
+        text: string;
+        memoryId?: string;
+    }) => {
         try {
             await archivist.process(task.text, task.memoryId);
-            // No need to post message back unless we want to track completion
-        } catch (err) {
+            parentPort?.postMessage({ taskId: task.taskId });
+        } catch (err: any) {
             console.error("[Worker] Error:", err);
+            parentPort?.postMessage({
+                taskId: task.taskId,
+                error: err?.message ?? String(err),
+            });
         }
     });
 }

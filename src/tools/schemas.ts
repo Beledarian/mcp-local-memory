@@ -1,28 +1,42 @@
 import { z } from "zod";
 
 export const CliArgsSchema = z.object({
-    command: z.string()
+    command: z.string().trim().min(1).max(20_000)
 });
 
 export const RememberFactArgsSchema = z.object({
-    text: z.string(),
-    tags: z.array(z.string()).optional()
+    text: z.string().trim().min(1).max(100_000),
+    tags: z.array(z.string().trim().min(1).max(200)).max(100).optional()
 });
 
 export const RememberFactsArgsSchema = z.object({
     facts: z.array(z.object({
-        text: z.string(),
-        tags: z.array(z.string()).optional()
-    }))
+        text: z.string().trim().min(1).max(100_000),
+        tags: z.array(z.string().trim().min(1).max(200)).max(100).optional()
+    })).min(1).max(1_000)
 });
 
 export const RecallArgsSchema = z.object({
-    query: z.string(),
-    limit: z.coerce.number().optional(),
+    query: z.string().trim().min(1).max(20_000),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
     startDate: z.string().optional(),
     endDate: z.string().optional(),
     json: z.coerce.boolean().optional(),
-    debug: z.coerce.boolean().optional()
+    debug: z.coerce.boolean().optional(),
+    include_outdated: z.coerce.boolean().optional()
+});
+
+export const ReinforceMemoryArgsSchema = z.object({
+    memory_id: z.string().uuid(),
+    signal: z.enum([
+        "used",
+        "important",
+        "irrelevant",
+        "incorrect",
+        "outdated",
+        "restore"
+    ]),
+    reason: z.string().trim().min(1).max(1_000).optional()
 });
 
 export const ForgetArgsSchema = z.object({
@@ -30,7 +44,7 @@ export const ForgetArgsSchema = z.object({
 });
 
 export const ListRecentMemoriesArgsSchema = z.object({
-    limit: z.coerce.number().optional(),
+    limit: z.coerce.number().int().min(1).max(100).optional(),
     json: z.coerce.boolean().optional()
 });
 
@@ -53,18 +67,18 @@ export const CreateRelationArgsSchema = z.object({
 
 export const ReadGraphArgsSchema = z.object({
     center: z.string().optional(),
-    depth: z.coerce.number().optional(),
+    depth: z.coerce.number().int().min(1).max(10).optional(),
     json: z.coerce.boolean().optional()
 });
 
 export const ClusterMemoriesArgsSchema = z.object({
-    k: z.coerce.number().optional()
+    k: z.coerce.number().int().min(1).max(100).optional()
 });
 
 export const ConsolidateContextArgsSchema = z.object({
     text: z.string(),
     strategy: z.enum(["nlp", "llm"]).optional(),
-    limit: z.coerce.number().optional()
+    limit: z.coerce.number().int().min(1).max(1_000).optional()
 });
 
 export const DeleteObservationArgsSchema = z.object({
@@ -83,7 +97,7 @@ export const CompleteTodoArgsSchema = z.object({
 
 export const ListTodosArgsSchema = z.object({
     status: z.enum(["pending", "completed"]).optional(),
-    limit: z.coerce.number().optional()
+    limit: z.coerce.number().int().min(1).max(100).optional()
 });
 
 export const InitConversationArgsSchema = z.object({

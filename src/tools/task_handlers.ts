@@ -93,10 +93,10 @@ export function handleListTasks(db: Database, args: { conversation_id?: string; 
     const tasks = db.prepare(query).all(...params) as any[];
     
     // Format as markdown checklist
-    let output = '# Task List\\n\\n';
+    let output = '# Task List\n\n';
     
     if (tasks.length === 0) {
-        output += 'No tasks found.\\n';
+        output += 'No tasks found.\n';
         return { tasks: output };
     }
     
@@ -111,12 +111,12 @@ export function handleListTasks(db: Database, args: { conversation_id?: string; 
     });
     
     sections.forEach((taskList, section) => {
-        output += `## ${section}\\n`;
+        output += `## ${section}\n`;
         taskList.forEach(task => {
             const checkbox = task.status === 'complete' ? '[x]' : task.status === 'in-progress' ? '[/]' : '[ ]';
-            output += `- ${checkbox} ${task.content} (ID: ${task.id})\\n`;
+            output += `- ${checkbox} ${task.content} (ID: ${task.id})\n`;
         });
-        output += '\\n';
+        output += '\n';
     });
     
     return { tasks: output };
@@ -177,7 +177,7 @@ export function handleListTodos(db: Database, args: { status?: string; limit?: n
     
     const todos = db.prepare("SELECT * FROM todos WHERE status = ? ORDER BY created_at DESC LIMIT ?").all(status, limit) as any[];
     
-    const list = todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content} (ID: ${t.id})`).join('\\n');
+    const list = todos.map(t => `- [${t.status === 'completed' ? 'x' : ' '}] ${t.content} (ID: ${t.id})`).join('\n');
     
     return {
         content: [{ type: "text", text: list || "No todos found." }]

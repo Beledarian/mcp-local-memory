@@ -25,16 +25,17 @@ export const CLI_TOOL = {
 };
 
 const resolveTaskOrTodoId = (db: Database, table: 'tasks' | 'todos', identifier: string): string | null => {
+    const completeStatus = table === 'tasks' ? 'complete' : 'completed';
     // 1. Try Exact ID match
     const byId = db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(identifier) as any;
     if (byId) return byId.id;
 
     // 2. Try Exact Content match (pending first)
-    const byContentExact = db.prepare(`SELECT id FROM ${table} WHERE content = ? AND status != 'complete' LIMIT 1`).get(identifier) as any;
+    const byContentExact = db.prepare(`SELECT id FROM ${table} WHERE content = ? AND status != ? LIMIT 1`).get(identifier, completeStatus) as any;
     if (byContentExact) return byContentExact.id;
 
     // 3. Try Fuzzy Content match (LIKE %...%)
-    const byContentFuzzy = db.prepare(`SELECT id, content FROM ${table} WHERE content LIKE ? AND status != 'complete' LIMIT 5`).all(`%${identifier}%`) as any[];
+    const byContentFuzzy = db.prepare(`SELECT id, content FROM ${table} WHERE content LIKE ? AND status != ? LIMIT 5`).all(`%${identifier}%`, completeStatus) as any[];
     
     if (byContentFuzzy.length === 1) {
         return byContentFuzzy[0].id;
@@ -45,6 +46,14 @@ const resolveTaskOrTodoId = (db: Database, table: 'tasks' | 'todos', identifier:
     }
 
     return null;
+};
+
+const toToolResult = (value: any) => {
+    if (value?.content && Array.isArray(value.content)) return value;
+    const text = typeof value?.tasks === 'string'
+        ? value.tasks
+        : JSON.stringify(value, null, 2);
+    return { content: [{ type: "text", text }] };
 };
 
 export const handleCLI = async (
@@ -74,7 +83,18 @@ export const handleCLI = async (
         }
     });
 
-    const verbs = args._.map(String);
+    const unquote = (value: string): string => {
+        const trimmed = value.trim();
+        if (
+            trimmed.length >= 2 &&
+            ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+                (trimmed.startsWith("'") && trimmed.endsWith("'")))
+        ) {
+            return trimmed.slice(1, -1);
+        }
+        return trimmed;
+    };
+    const verbs = args._.map((value: unknown) => unquote(String(value)));
     if (verbs.length === 0) {
         return { content: [{ type: "text", text: "No command provided. Try 'help'." }], isError: true };
     }
@@ -102,6 +122,9 @@ Commands:
   
   recall <query>            Search memories.
                             Usage: recall "python" --limit 5
+
+  reinforce <id> <signal>   Record confirmed memory feedback.
+                            Signals: used, important, irrelevant, incorrect
   
   graph <center?>           View knowledge graph.
                             Usage: graph "Antigravity" --depth 2
@@ -180,6 +203,26 @@ Flags:
                     endDate: args.endDate
                 });
             }
+
+            case 'reinforce':
+            case 'feedback': {
+                const id = verbs[1];
+                const signal = verbs[2];
+                if (!id || !signal) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: "Usage: reinforce <memory-id> <used|important|irrelevant|incorrect> [--reason text]",
+                        }],
+                        isError: true,
+                    };
+                }
+                return core.handleReinforceMemory(db, {
+                    memory_id: id,
+                    signal,
+                    reason: args.reason ? String(args.reason) : undefined,
+                });
+            }
             
             case 'graph':
             case 'read_graph': {
@@ -248,21 +291,21 @@ Flags:
                 
                 if (sub === 'add' || sub === 'new') {
                     if (!rest) return { content: [{ type: "text", text: "Usage: task add <content>" }], isError: true };
-                    return taskHandlers.handleAddTask(db, { 
-                        content: rest, 
-                        section: args.section, 
-                        conversation_id: args.conversation_id 
-                    });
+                    return toToolResult(taskHandlers.handleAddTask(db, {
+                        content: rest,
+                        section: args.section,
+                        conversation_id: args.conversation_id
+                    }));
                 }
-                if (sub === 'list' || sub === 'ls') return taskHandlers.handleListTasks(db, { 
-                    conversation_id: args.conversation_id, 
-                    status: args.status 
-                });
+                if (sub === 'list' || sub === 'ls') return toToolResult(taskHandlers.handleListTasks(db, {
+                    conversation_id: args.conversation_id,
+                    status: args.status
+                }));
                 if (sub === 'update' || sub === 'status') {
                     const id = verbs[2];
                     const status = verbs[3] || args.status;
                     if (!id || !status) return { content: [{ type: "text", text: "Usage: task update <id> <status>" }], isError: true };
-                    return taskHandlers.handleUpdateTaskStatus(db, { id, status });
+                    return toToolResult(taskHandlers.handleUpdateTaskStatus(db, { id, status }));
                 }
                 if (sub === 'done' || sub === 'complete' || sub === 'finish') {
                     const selector = verbs[2] || rest;
@@ -271,7 +314,7 @@ Flags:
                     const resolvedId = resolveTaskOrTodoId(db, 'tasks', selector);
                     if (!resolvedId) return { content: [{ type: "text", text: `Task "${selector}" not found.` }], isError: true };
 
-                    return taskHandlers.handleUpdateTaskStatus(db, { id: resolvedId, status: 'complete' });
+                    return toToolResult(taskHandlers.handleUpdateTaskStatus(db, { id: resolvedId, status: 'complete' }));
                 }
                 if (sub === 'del' || sub === 'delete') {
                     const selector = verbs[2] || rest;
@@ -280,7 +323,7 @@ Flags:
                     const resolvedId = resolveTaskOrTodoId(db, 'tasks', selector);
                     if (!resolvedId) return { content: [{ type: "text", text: `Task "${selector}" not found.` }], isError: true };
 
-                    return taskHandlers.handleDeleteTask(db, { id: resolvedId });
+                    return toToolResult(taskHandlers.handleDeleteTask(db, { id: resolvedId }));
                 }
                 return { content: [{ type: "text", text: "Unknown task command. Try: add, list, update, done, del" }], isError: true };
             }

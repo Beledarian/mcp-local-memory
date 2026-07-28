@@ -5,11 +5,17 @@ import { fileURLToPath } from 'url';
 
 import os from 'os';
 import fs from 'fs-extra';
+import { createHash } from 'crypto';
 
 // Load the database file. If allowed, we should put it in a persistent location.
 // Default to ~/.memory/memory.db
 const DEFAULT_PATH = path.join(os.homedir(), '.memory', 'memory.db');
 export const RESOLVED_DB_PATH = process.env.MEMORY_DB_PATH || DEFAULT_PATH;
+const BUNDLED_WINDOWS_ARM64_VEC = fileURLToPath(
+  new URL('../../vendor/sqlite-vec/windows-arm64/vec0.dll', import.meta.url),
+);
+const BUNDLED_WINDOWS_ARM64_VEC_SHA256 =
+  '995e679c4098d5e266719637c86a85bead623bf9850f4b250c6180593047723c';
 
 function levenshtein(a: string, b: string): number {
   if (a.length < b.length) [a, b] = [b, a];
@@ -44,11 +50,41 @@ export function getDb(customPath?: string) {
   
   // Register custom functions
   db.function('levenshtein', (a: any, b: any) => levenshtein(String(a), String(b)));
-  // Load sqlite-vec extension
+  // Load sqlite-vec extension. Upstream does not publish a Windows ARM64 npm
+  // binary, so that platform uses the verified upstream build bundled here.
   try {
-    sqliteVec.load(db);
-  } catch (err) {
-    console.error("Failed to load sqlite-vec extension. Vector search will not be available.", err);
+    if (
+      process.platform === 'win32' &&
+      process.arch === 'arm64' &&
+      fs.existsSync(BUNDLED_WINDOWS_ARM64_VEC)
+    ) {
+      const actualHash = createHash('sha256')
+        .update(fs.readFileSync(BUNDLED_WINDOWS_ARM64_VEC))
+        .digest('hex');
+      if (actualHash !== BUNDLED_WINDOWS_ARM64_VEC_SHA256) {
+        throw new Error(
+          `bundled Windows ARM64 sqlite-vec checksum mismatch: ${actualHash}`,
+        );
+      }
+      db.loadExtension(BUNDLED_WINDOWS_ARM64_VEC);
+      const version = db.prepare('SELECT vec_version() AS version').get() as {
+        version: string;
+      };
+      console.error(
+        `[Vector] Loaded bundled sqlite-vec ${version.version} for native Windows ARM64.`,
+      );
+    } else {
+      sqliteVec.load(db);
+    }
+  } catch (err: any) {
+    const wslHint = process.platform === 'win32' && process.arch === 'arm64'
+      ? ' The bundled native Windows ARM64 extension failed; WSL2 remains available as a fallback.'
+      : '';
+    console.error(
+      `[Vector] sqlite-vec unavailable on ${process.platform}/${process.arch}; ` +
+      `semantic search is disabled and recall will use FTS.${wslHint} ` +
+      `(${err?.message ?? String(err)})`
+    );
   }
   
   return db;
