@@ -5,7 +5,7 @@ import test from "node:test";
 
 test("package allowlist excludes arbitrary local extensions", () => {
   const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
-  assert.equal(packageJson.version, "2.0.1");
+  assert.equal(packageJson.version, "2.1.0");
   assert.equal(packageJson.engines.node, ">=22.0.0");
   assert.equal(packageJson.license, "MIT");
   assert.equal(

@@ -44,6 +44,8 @@ import * as taskHandlers from './tools/task_handlers.js';
 import { loadExtensions } from "./lib/extensions.js";
 import * as core from './tools/core.js';
 import { scoreVectorRecall } from './lib/scoring.js';
+import * as schemas from "./tools/schemas.js";
+import { startSseServer } from "./server/sse.js";
 
 // Load extensions
 const EXTENSIONS_PATH = process.env.EXTENSIONS_PATH;
@@ -105,22 +107,23 @@ const archivist = getArchivist(db, async (text) => {
     return Array.from(vectors);
 });
 
-// Create server instance
-const server = new Server(
-  {
-    name: "mcp-local-memory",
-    version: "2.0.0",
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
+// ponytail: Factory creating MCP Server with full tool and resource bindings
+export function createServer(): Server {
+  const server = new Server(
+    {
+      name: "mcp-local-memory",
+      version: "2.0.1",
     },
-  }
-);
+    {
+      capabilities: {
+        tools: {},
+        resources: {},
+      },
+    }
+  );
 
-// List available resources
-server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  // List available resources
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
     return {
         resources: [
             {
@@ -341,8 +344,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools };
 });
 
-import * as schemas from "./tools/schemas.js";
-
 const toolSchemas: Record<string, any> = {
   "cli": schemas.CliArgsSchema,
   "remember_fact": schemas.RememberFactArgsSchema,
@@ -556,11 +557,45 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       ],
     };
   }
-});
+  });
+
+  return server;
+}
+
+function parseCliArgs() {
+  const args = process.argv.slice(2);
+  let isSse = process.env.MCP_TRANSPORT === 'sse';
+  let port = Number(process.env.PORT) || Number(process.env.MCP_PORT) || 8320;
+  let host = process.env.HOST || '0.0.0.0';
+  let token: string | null = process.env.MCP_AUTH_TOKEN || process.env.AUTH_TOKEN || null;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--sse') {
+      isSse = true;
+    } else if (arg === '--transport' && args[i + 1]) {
+      if (args[++i] === 'sse') isSse = true;
+    } else if (arg.startsWith('--transport=')) {
+      if (arg.split('=')[1] === 'sse') isSse = true;
+    } else if (arg === '--port' && args[i + 1]) {
+      port = Number(args[++i]);
+    } else if (arg.startsWith('--port=')) {
+      port = Number(arg.split('=')[1]);
+    } else if (arg === '--host' && args[i + 1]) {
+      host = args[++i];
+    } else if (arg.startsWith('--host=')) {
+      host = arg.split('=')[1];
+    } else if (arg === '--token' && args[i + 1]) {
+      token = args[++i];
+    } else if (arg.startsWith('--token=')) {
+      token = arg.split('=')[1];
+    }
+  }
+
+  return { isSse, port, host, token };
+}
 
 async function run() {
-  const transport = new StdioServerTransport();
-
   // Initialize Extensions (Startup Hooks)
   for (const ext of extensions) {
       if (ext.init) {
@@ -569,16 +604,25 @@ async function run() {
               await ext.init(db);
               // console.error(`[Server] Init hook complete for ${ext.tool.name}`);
           } catch (err: any) {
-              // console.error(`[Server] Init hook failed for ${ext.tool.name}:`, err.message);
+              console.error(`[Server] Init hook failed for ${ext.tool.name}:`, err.message);
           }
       }
   }
 
-  await server.connect(transport);
-  // console.error("Local Memory MCP Server running on stdio");
+  const { isSse, port, host, token } = parseCliArgs();
+
+  if (isSse) {
+    startSseServer(createServer, { port, host, token });
+  } else {
+    // Default stdio transport (100% backward compatible for standard MCP clients)
+    const server = createServer();
+    const transport = new StdioServerTransport();
+    await server.connect(transport);
+  }
 }
 
 run().catch((error) => {
   console.error("Fatal error running server:", error);
   process.exit(1);
 });
+

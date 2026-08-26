@@ -79,11 +79,41 @@ npm start
 See the [Codex + WSL2 setup](docs/extended-guide.md#codex--wsl2) when the
 database or server runs inside Linux.
 
+## Remote Server & Docker Deployment (SSE)
+
+`mcp-local-memory` supports native **HTTP/SSE transport** for centralized setups across multiple workstations, laptops, Tailnets, or VPS instances:
+
+```bash
+# Run standalone SSE server on port 8320 with optional Bearer token auth:
+node dist/index.js --transport sse --port 8320 --token "your-secret-token"
+
+# Or run via Docker Compose:
+docker compose up -d
+```
+
+Configure your remote MCP client (`mcp_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "url": "https://your-server.ts.net:8320/sse",
+      "headers": {
+        "Authorization": "Bearer your-secret-token"
+      }
+    }
+  }
+}
+```
+
 ## Essential configuration
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `MEMORY_DB_PATH` | `~/.memory/memory.db` | SQLite database location. |
+| `MCP_TRANSPORT` | `stdio` | `stdio` (default) or `sse` (remote HTTP/SSE server). |
+| `PORT` / `MCP_PORT` | `8320` | HTTP port when running in SSE mode. |
+| `MCP_AUTH_TOKEN` | unset | Optional Bearer token for remote SSE authentication. |
 | `ARCHIVIST_STRATEGY` | `nlp` | `passive`, `nlp`, `llm`, or a comma-separated combination. |
 | `OLLAMA_URL` | `http://localhost:11434/api/generate` | Optional LLM generation endpoint. |
 | `MEMORY_SEMANTIC_WEIGHT` | `0.9` | Retrieval relevance versus decayed importance. |

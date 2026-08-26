@@ -1,0 +1,29 @@
+services:
+  mcp-memory:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-local-memory:latest
+    container_name: mcp-memory
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8320:8320"
+    environment:
+      - NODE_ENV=production
+      - MCP_TRANSPORT=sse
+      - PORT=8320
+      - HOST=0.0.0.0
+      - MEMORY_DB_PATH=/data/memory.db
+      - EXTENSIONS_PATH=/data/extensions
+      - ARCHIVIST_STRATEGY=nlp
+      - CONTEXT_MAX_ENTITIES=10
+      - CONTEXT_MAX_MEMORIES=10
+      - CONTEXT_WINDOW_LIMIT=10000
+      - ENABLE_PASSIVE_DECAY=true
+      - MEMORY_CONSOLIDATION_FACTOR=1.0
+      - MEMORY_HALF_LIFE_WEEKS=4.0
+      - MEMORY_SEMANTIC_WEIGHT=0.7
+      - TAG_MATCH_BOOST=0.15
+      - USE_WORKER=false
+    volumes:
+      - /home/beledarian/.memory:/data

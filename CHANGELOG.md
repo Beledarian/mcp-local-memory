@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-08-26
+
+### Added
+
+- Added opt-in native SSE / HTTP server transport (`--transport sse` / `--sse` or `MCP_TRANSPORT=sse`) powered by Node.js standard library `node:http` and `SSEServerTransport`.
+- Added configurable port (`--port <number>` / `PORT`), host (`--host <ip>` / `HOST`), and timing-safe Bearer / query token authentication (`--token <token>` / `MCP_AUTH_TOKEN`).
+- Added `/health` endpoint and automatic 25s SSE keep-alive heartbeat for NAT/reverse-proxy resilience.
+- Added official `Dockerfile` and `docker-compose.yml` for zero-dependency containerized deployments.
+- Added support for remote multi-client connections over LAN, Tailscale HTTPS, and Caddy reverse proxies with single-writer SQLite WAL concurrency.
+
+### Changed
+
+- Stdio transport remains the default mode when no transport arguments are passed, preserving 100% backward compatibility for all existing standard MCP configurations.
+
 ## [2.0.1] - 2026-07-29
 
 ### Fixed
