@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-09-14
+
+### Fixed
+
+- Added dual-transport support for modern **Streamable HTTP** (MCP 2025-03 standard used by Google Antigravity, Claude Code, and Cursor) alongside legacy SSE transport.
+- Fixed connection failure (`session not found: unspecified`) when Streamable HTTP clients send `POST /sse` handshake with JSON-RPC `initialize`.
+- Added CORS headers `Mcp-Session-Id` and `Last-Event-ID` with `Access-Control-Expose-Headers: Mcp-Session-Id` for browser and cross-origin agent clients.
+- Added session routing for `DELETE` (clean session termination) and standalone SSE notification streams via `GET` with `Mcp-Session-Id`.
+- Maintained 100% backward compatibility for legacy `GET /sse` and `POST /messages?sessionId=...` clients.
+
 ## [2.1.0] - 2026-08-26
 
 ### Added

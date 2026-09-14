@@ -112,7 +112,7 @@ export function createServer(): Server {
   const server = new Server(
     {
       name: "mcp-local-memory",
-      version: "2.0.1",
+      version: "2.1.1",
     },
     {
       capabilities: {
