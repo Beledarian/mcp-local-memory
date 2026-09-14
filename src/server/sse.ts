@@ -48,21 +48,22 @@ export function startSseServer(
   }
 
   const httpServer = http.createServer(async (req, res) => {
-    // CORS headers for cross-device agent clients & webviews
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, Last-Event-ID');
-    res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
+    try {
+      // CORS headers for cross-device agent clients & webviews
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Session-Id, Last-Event-ID');
+      res.setHeader('Access-Control-Expose-Headers', 'Mcp-Session-Id');
 
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
+      if (req.method === 'OPTIONS') {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
 
-    const hostHeader = req.headers.host || `localhost:${port}`;
-    const protocol = (req.socket as any).encrypted ? 'https' : 'http';
-    const url = new URL(req.url || '/', `${protocol}://${hostHeader}`);
+      const hostHeader = req.headers.host || `localhost:${port}`;
+      const protocol = (req.socket as any).encrypted ? 'https' : 'http';
+      const url = new URL(req.url || '/', `${protocol}://${hostHeader}`);
     const normalizedPath = url.pathname.replace(/\/+$/, '') || '/';
 
     // Health check endpoint
@@ -224,6 +225,16 @@ export function startSseServer(
 
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     res.end('Not Found');
+    } catch (err: any) {
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: 'Internal server error: ' + (err?.message || 'Unknown error') },
+          id: null
+        }));
+      }
+    }
   });
 
   // Keep-alive heartbeat (every 25s) for legacy SSE sessions to prevent NAT/proxy timeouts
@@ -256,6 +267,8 @@ export function startSseServer(
     for (const entry of streamableSessions.values()) {
       try { entry.transport.close().catch(() => {}); } catch {}
     }
+    legacySessions.clear();
+    streamableSessions.clear();
   });
 
   httpServer.listen(port, host, () => {

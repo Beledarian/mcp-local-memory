@@ -151,5 +151,7 @@ All notable changes to this project are documented here. The format is based on
   `--apply --backup <new-path>` arguments.
 - WSL users should place scoring variables inside the Linux command environment;
   Windows-side MCP environment entries may not reach the Linux process.
+[2.1.1]: https://github.com/Beledarian/mcp-local-memory/compare/v2.1.0...v2.1.1
+[2.1.0]: https://github.com/Beledarian/mcp-local-memory/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/Beledarian/mcp-local-memory/compare/v2.0.0...v2.0.1
 [2.0.0]: https://github.com/Beledarian/mcp-local-memory/compare/v1.1.0...v2.0.0
